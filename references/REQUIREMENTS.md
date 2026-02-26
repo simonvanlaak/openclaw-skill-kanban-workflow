@@ -61,7 +61,8 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 
 ### 3) `complete`
 
-- Post a **Completed** comment.
+- Requires a short completion **summary** string.
+- Post a **Completed** comment including that summary.
 - Move the task to `stage:in-review`.
 
 ### 4) `ask`
@@ -81,6 +82,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 - Must create work item in the target platform.
 - Must apply/encode `stage:backlog`.
 - Must assign to the agent identity.
+- Keep `create` minimal for now (no linked-ticket relationships created at creation time).
 
 ## Not required (explicitly)
 
