@@ -24,12 +24,12 @@ Notes:
 
 Clawban must provide a `setup` command to configure enabled adapters and scope/order mappings.
 
-- Setup should allow selecting which adapters to use (GitHub/Plane/Linear/Planka).
 - Setup must be **flags-only / non-interactive** (scriptable).
-- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check) and **fail hard** if any selected adapter check fails.
+- Setup currently supports configuring **exactly one** active adapter (GitHub *or* Plane *or* Linear *or* Planka).
+- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check) and **fail hard** if the selected adapter check fails.
 - Setup validations are **read-only** (no comments/transitions/creates during setup).
-- Setup must configure the explicit human ordering source (e.g., GitHub Project selection) per adapter.
-- Config storage (chosen): store config in-repo (versionable) under `config/clawban.json`.
+- Setup must configure the explicit human ordering source (e.g., GitHub Project selection) for the selected adapter.
+- Config storage: store config in-repo (versionable) under `config/clawban.json`.
 - Only **one** config file/profile is supported (no multiple profiles).
 - `setup` must require an explicit `--force` to overwrite an existing `config/clawban.json`.
 
@@ -40,7 +40,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 **Goal:** show the content of a specific ticket/work item on demand (even if it is not the next item).
 
 - Input: platform scope + work item identifier.
-- Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
+- Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), **attachments (links/metadata) where supported**, and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
 - Also include: titles of any linked/related tickets (e.g., blocks/blocked-by/duplicates) where supported.
 - Use case: follow linked/blocked tickets during implementation.
 
@@ -48,6 +48,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 
 **Goal:** return the next work item the agent should work on.
 
+- `next` returns **exactly one** ticket (no "up next" list).
 - `next` must return the same payload shape as `show` (i.e., it should reuse the `show` implementation to display the selected ticket: full body/description, last 10 comments incl. private, and titles of linked/related tickets where supported).
 
 - Primary need: *only* `next` for discovery/selection.
