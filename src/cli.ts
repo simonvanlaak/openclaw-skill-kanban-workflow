@@ -46,12 +46,13 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
 
 export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.stdout, stderr: process.stderr }): Promise<number> {
   const { cmd, flags } = parseArgs(rawArgv);
-  if (flags.config) {
-    throw new Error('Only a single config file is supported: config/clawban.json (no --config override)');
-  }
   const configPath = 'config/clawban.json';
 
   try {
+    if (flags.config) {
+      throw new Error('Only a single config file is supported: config/clawban.json (no --config override)');
+    }
+
     if (cmd === 'setup') {
       const force = Boolean(flags.force);
 

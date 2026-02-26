@@ -203,10 +203,10 @@ export class LinearAdapter implements Adapter {
     const items = new Map<string, WorkItem>();
 
     for (const node of nodes) {
+      const stateId = node.state?.id;
       const stateName = node.state?.name;
-      if (!stateName) continue;
 
-      const mapped = this.stageMap[stateName];
+      const mapped = (stateId && this.stageMap[stateId]) || (stateName && this.stageMap[stateName]);
       if (!mapped) {
         // Ignore states not mapped into the canonical set.
         continue;
