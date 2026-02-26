@@ -75,7 +75,7 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - Scope input: repo/project/workspace/team.
 
 2) **`create` payload + assignment details:**
-   - Minimal fields: title only, or title + description/body?
+   - `create` must accept: **title + description/body in Markdown**.
    - Do we require applying `stage:queued` via label/state/list *in addition* to the platform’s default state?
    - For each platform, what identifier should be used for “assign to self”? (prefer CLI `whoami` JSON → stable user id)
 
