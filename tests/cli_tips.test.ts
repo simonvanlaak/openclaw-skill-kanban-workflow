@@ -94,7 +94,8 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(0);
     expect(startVerb).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/What next: run `clawban ask --id <id> --text/);
+    expect(cap.out.join('')).toMatch(/What next: run the actual execution in a subagent/);
+    expect(cap.out.join('')).toMatch(/then `clawban ask --id <id> --text/);
     expect(cap.out.join('')).toMatch(/or `clawban update --id <id> --text/);
   });
 

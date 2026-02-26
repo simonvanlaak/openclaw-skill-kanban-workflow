@@ -20,7 +20,7 @@ function whatNextTipForCommand(cmd: string): string {
     case 'next':
       return 'run `clawban start --id <id>`';
     case 'start':
-      return 'run `clawban ask --id <id> --text "..."` or `clawban update --id <id> --text "..."`';
+      return 'run the actual execution in a subagent; then `clawban ask --id <id> --text "..."` or `clawban update --id <id> --text "..."`';
     case 'ask':
       return 'run `clawban next`';
     case 'update':
