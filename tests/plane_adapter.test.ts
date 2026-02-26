@@ -19,24 +19,31 @@ describe('PlaneAdapter', () => {
     (execa as any as ExecaMock).mockReset();
   });
 
-  it('lists issues and maps state.name to canonical Stage', async () => {
-    (execa as any as ExecaMock).mockResolvedValueOnce({
-      stdout: JSON.stringify([
-        {
-          id: 'i1',
-          name: 'No stage',
-          state_detail: { name: 'Doing' }
-        },
-        {
-          id: 'i2',
-          name: 'Queued',
-          url: 'https://plane.example/issues/i2',
-          updated_at: '2026-02-26T08:31:00Z',
-          state: { name: 'stage:backlog' },
-          labels: [{ name: 'bug' }, { name: 'stage:backlog' }]
-        }
-      ])
-    });
+  it('lists assigned issues and maps state.name to canonical Stage', async () => {
+    // ensureMeId() -> whoami()
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ id: 'me1', email: 'me@example.com' }),
+      })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // issues list
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i1',
+            name: 'No stage',
+            state_detail: { name: 'Doing' },
+          },
+          {
+            id: 'i2',
+            name: 'Queued',
+            url: 'https://plane.example/issues/i2',
+            updated_at: '2026-02-26T08:31:00Z',
+            state: { name: 'stage:backlog' },
+            labels: [{ name: 'bug' }, { name: 'stage:backlog' }],
+          },
+        ]),
+      });
 
     const adapter = new PlaneAdapter({
       workspaceSlug: 'ws',
@@ -52,9 +59,12 @@ describe('PlaneAdapter', () => {
 
     const snap = await adapter.fetchSnapshot();
 
-    expect(execa).toHaveBeenCalledWith(
+    expect(execa).toHaveBeenNthCalledWith(1, 'plane', ['me', '-f', 'json'], { stdout: 'pipe', stderr: 'pipe' });
+    expect(execa).toHaveBeenNthCalledWith(2, 'plane', ['projects', 'list', '-f', 'json'], { stdout: 'pipe', stderr: 'pipe' });
+    expect(execa).toHaveBeenNthCalledWith(
+      3,
       'plane',
-      ['issues', 'list', '-p', 'proj', '-f', 'json'],
+      ['issues', 'list', '-p', 'proj', '--assignee', 'me1', '-f', 'json'],
       {
         stdout: 'pipe',
         stderr: 'pipe',
@@ -67,15 +77,18 @@ describe('PlaneAdapter', () => {
   });
 
   it('supports mapping non-canonical Plane state names via stageMap', async () => {
-    (execa as any as ExecaMock).mockResolvedValueOnce({
-      stdout: JSON.stringify([
-        {
-          id: 'i3',
-          name: 'Mapped',
-          state_detail: { name: 'Doing' }
-        }
-      ])
-    });
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i3',
+            name: 'Mapped',
+            state_detail: { name: 'Doing' },
+          },
+        ]),
+      });
 
     const adapter = new PlaneAdapter({
       workspaceSlug: 'ws',
@@ -87,9 +100,10 @@ describe('PlaneAdapter', () => {
 
     const snap = await adapter.fetchSnapshot();
 
-    expect(execa).toHaveBeenCalledWith(
+    expect(execa).toHaveBeenNthCalledWith(
+      3,
       'plane',
-      ['issues', 'list', '-p', 'proj', '-f', 'json'],
+      ['issues', 'list', '-p', 'proj', '--assignee', 'me1', '-f', 'json'],
       {
         stdout: 'pipe',
         stderr: 'pipe',

@@ -6,6 +6,8 @@ This document captures the initial Q&A requirements for Kanban Workflow’s verb
 
 - **Canonical state machine:** use existing `stage:*` lifecycle.
 - **CLI-first auth:** adapters must use platform CLIs/scripts for auth/session. Kanban Workflow does not run interactive OAuth flows or persist secrets, but adapter CLIs may require environment variables (API keys) and may make HTTPS calls internally.
+- **Multi-scope (future):** Kanban Workflow should support monitoring multiple scopes per adapter (e.g. all Plane projects, multiple Linear teams/projects, multiple GitHub repos/projects). Constraint: all monitored scopes must share consistent stage/state names so a single `stageMap` works.
+- **Assigned-only autopilot:** autopilot selection should be able to operate on items assigned to the current user only (initial implementation: Plane).
 - **Cross-platform:** GitHub, Planka, Plane, Linear.
 
 ## Canonical stage names

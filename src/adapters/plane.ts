@@ -31,7 +31,7 @@ function discoverPlaneOrderField(issues: any[]): string | undefined {
  * Commands used (JSON format):
  * - `plane me -f json`
  * - `plane projects list -f json`
- * - `plane issues list -p <project_id> -f json`
+ * - `plane issues list -p <project_id> --assignee <me_id> -f json`
  * - `plane issues get -p <project_id> <issue_id> -f json`
  * - `plane issues update -p <project_id> <issue_id> --state <state_id>`
  */
@@ -43,13 +43,19 @@ export class PlaneAdapter implements Adapter {
   // The plane CLI itself uses `PLANE_WORKSPACE` for workspace selection.
   private readonly workspaceSlug: string;
 
-  private readonly projectId: string;
+  private readonly projectIds: readonly string[];
   private readonly stageMap: Readonly<Record<string, StageKey>>;
   private readonly orderField?: string;
 
+  private meId?: string;
+  private issueProjectIndex = new Map<string, string>();
+
   constructor(opts: {
     workspaceSlug: string;
-    projectId: string;
+    /** Single project scope. */
+    projectId?: string;
+    /** Multi-project scope. */
+    projectIds?: readonly string[];
     bin?: string;
     baseArgs?: readonly string[];
     /** Required mapping: Plane state/list names -> canonical stage key. */
@@ -60,7 +66,11 @@ export class PlaneAdapter implements Adapter {
     this.cli = new CliRunner(opts.bin ?? 'plane');
     this.baseArgs = opts.baseArgs ?? [];
     this.workspaceSlug = opts.workspaceSlug;
-    this.projectId = opts.projectId;
+    const ids = opts.projectIds ?? (opts.projectId ? [opts.projectId] : []);
+    if (ids.length === 0) {
+      throw new Error('PlaneAdapter requires projectId or projectIds');
+    }
+    this.projectIds = ids;
     this.stageMap = opts.stageMap;
     this.orderField = opts.orderField;
   }
@@ -79,8 +89,11 @@ export class PlaneAdapter implements Adapter {
     const parsed = meOut.trim().length > 0 ? JSON.parse(meOut) : {};
     const me = parsed?.me ?? parsed?.data?.me ?? parsed;
 
+    const id = me?.id ? String(me.id) : undefined;
+    if (id) this.meId = id;
+
     return {
-      id: me?.id ? String(me.id) : undefined,
+      id,
       username: me?.email ? String(me.email) : me?.username ? String(me.username) : undefined,
       name: me?.display_name
         ? String(me.display_name)
@@ -99,10 +112,15 @@ export class PlaneAdapter implements Adapter {
       .map((i) => i.id);
   }
 
-  private async listIssuesRaw(): Promise<unknown[]> {
-    const out = await this.cli.run([...this.baseArgs, 'issues', 'list', '-p', this.projectId, '-f', 'json']);
-    const parsed = out.trim().length > 0 ? JSON.parse(out) : [];
+  private async ensureMeId(): Promise<string> {
+    if (this.meId) return this.meId;
+    const me = await this.whoami();
+    if (!me.id) throw new Error('PlaneAdapter: could not determine current user id (plane me)');
+    return me.id;
+  }
 
+  private parseListOutput(out: string): unknown[] {
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : [];
     return Array.isArray(parsed)
       ? parsed
       : parsed?.results && Array.isArray(parsed.results)
@@ -110,13 +128,40 @@ export class PlaneAdapter implements Adapter {
         : [];
   }
 
-  private async getIssueRaw(issueId: string): Promise<any> {
+  private async listIssuesRaw(projectId: string): Promise<unknown[]> {
+    // Assigned-only: only work on issues assigned to the authenticated user.
+    const meId = await this.ensureMeId();
+
+    const out = await this.cli.run([
+      ...this.baseArgs,
+      'issues',
+      'list',
+      '-p',
+      projectId,
+      '--assignee',
+      meId,
+      '-f',
+      'json',
+    ]);
+
+    return this.parseListOutput(out);
+  }
+
+  private async listIssuesAllProjectsRaw(): Promise<Array<{ projectId: string; issues: unknown[] }>> {
+    const results: Array<{ projectId: string; issues: unknown[] }> = [];
+    for (const projectId of this.projectIds) {
+      results.push({ projectId, issues: await this.listIssuesRaw(projectId) });
+    }
+    return results;
+  }
+
+  private async getIssueRaw(projectId: string, issueId: string): Promise<any> {
     const out = await this.cli.run([
       ...this.baseArgs,
       'issues',
       'get',
       '-p',
-      this.projectId,
+      projectId,
       issueId,
       '-f',
       'json',
@@ -126,9 +171,27 @@ export class PlaneAdapter implements Adapter {
     return parsed?.issue ?? parsed?.data?.issue ?? parsed;
   }
 
-  private async listStatesRaw(): Promise<Array<{ id?: string; name?: string }>> {
+  private async resolveProjectIdForIssue(issueId: string): Promise<string> {
+    const known = this.issueProjectIndex.get(issueId);
+    if (known) return known;
+
+    // Slow path: probe each project until one succeeds.
+    for (const projectId of this.projectIds) {
+      try {
+        await this.getIssueRaw(projectId, issueId);
+        this.issueProjectIndex.set(issueId, projectId);
+        return projectId;
+      } catch {
+        // keep trying
+      }
+    }
+
+    throw new Error(`Plane issue not found in configured projects: ${issueId}`);
+  }
+
+  private async listStatesRaw(projectId: string): Promise<Array<{ id?: string; name?: string }>> {
     // Best-effort: the plane CLI may expose this as `states list`.
-    const out = await this.cli.run([...this.baseArgs, 'states', 'list', '-p', this.projectId, '-f', 'json']);
+    const out = await this.cli.run([...this.baseArgs, 'states', 'list', '-p', projectId, '-f', 'json']);
     const parsed = out.trim().length > 0 ? JSON.parse(out) : [];
 
     const arr: unknown[] = Array.isArray(parsed)
@@ -204,48 +267,54 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listBacklogIdsInOrder(): Promise<string[]> {
-    // Try to preserve explicit UI ordering if we can discover it from issue fields.
-    // Otherwise require an explicit order field from setup, and finally fall back to updatedAt desc.
-    const rawIssues = await this.listIssuesRaw();
+    // Multi-project: we need a deterministic cross-project ordering.
+    // Strategy:
+    // - Preserve per-project UI ordering when possible.
+    // - Combine projects in configured order (projectIds array order).
+    // - Fall back to updatedAt desc per project when no order field is available.
 
-    const orderField = this.orderField ?? discoverPlaneOrderField(rawIssues as any[]);
+    const all = await this.listIssuesAllProjectsRaw();
 
-    if (this.orderField === undefined && orderField === undefined) {
-      throw new Error(
-        'Plane ordering not discoverable. Re-run setup with --plane-order-field <fieldName> to match UI order, or accept updatedAt fallback by specifying a field.',
+    const orderedPerProject: string[] = [];
+
+    for (const { projectId, issues } of all) {
+      const orderField = this.orderField ?? discoverPlaneOrderField(issues as any[]);
+      const snap = this.mapIssuesToSnapshot(issues);
+
+      // update index
+      for (const id of snap.keys()) this.issueProjectIndex.set(id, projectId);
+
+      const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+
+      if (orderField) {
+        const byId = new Map((issues as any[]).map((x: any) => [String(x?.id), x] as const));
+        const withOrder = backlog
+          .map((i) => ({ id: i.id, order: Number(byId.get(i.id)?.[orderField]), updatedAt: i.updatedAt }))
+          .filter((x) => Number.isFinite(x.order));
+
+        if (withOrder.length > 0) {
+          withOrder.sort((a, b) => a.order - b.order);
+          const orderedIds = withOrder.map((x) => x.id);
+          const orderedSet = new Set(orderedIds);
+          const rest = backlog
+            .filter((i) => !orderedSet.has(i.id))
+            .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+            .map((i) => i.id);
+
+          orderedPerProject.push(...orderedIds, ...rest);
+          continue;
+        }
+      }
+
+      // fallback
+      orderedPerProject.push(
+        ...backlog
+          .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+          .map((i) => i.id),
       );
     }
 
-    const snap = this.mapIssuesToSnapshot(rawIssues);
-    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
-
-    if (orderField) {
-      const byId = new Map((rawIssues as any[]).map((x: any) => [String(x?.id), x] as const));
-      const withOrder = backlog
-        .map((i) => ({
-          id: i.id,
-          order: Number(byId.get(i.id)?.[orderField]),
-          updatedAt: i.updatedAt,
-        }))
-        .filter((x) => Number.isFinite(x.order));
-
-      if (withOrder.length > 0) {
-        withOrder.sort((a, b) => a.order - b.order);
-        const orderedIds = withOrder.map((x) => x.id);
-        const orderedSet = new Set(orderedIds);
-
-        const rest = backlog
-          .filter((i) => !orderedSet.has(i.id))
-          .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-          .map((i) => i.id);
-
-        return [...orderedIds, ...rest];
-      }
-    }
-
-    return [...backlog]
-      .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-      .map((i) => i.id);
+    return orderedPerProject;
   }
 
   async getWorkItem(id: string): Promise<{
@@ -257,7 +326,8 @@ export class PlaneAdapter implements Adapter {
     labels: string[];
     updatedAt?: Date;
   }> {
-    const issue = await this.getIssueRaw(id);
+    const projectId = await this.resolveProjectIdForIssue(String(id));
+    const issue = await this.getIssueRaw(projectId, id);
 
     const snap = this.mapIssuesToSnapshot([issue]);
     const item = snap.get(String(id));
@@ -280,12 +350,13 @@ export class PlaneAdapter implements Adapter {
   ): Promise<Array<{ id: string; body: string }>> {
     // Best-effort: not all plane CLIs expose comments.
     try {
+      const projectId = await this.resolveProjectIdForIssue(String(id));
       const out = await this.cli.run([
         ...this.baseArgs,
         'comments',
         'list',
         '-p',
-        this.projectId,
+        projectId,
         id,
         '-f',
         'json',
@@ -311,7 +382,8 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listAttachments(id: string): Promise<Array<{ filename: string; url: string }>> {
-    const issue = await this.getIssueRaw(id);
+    const projectId = await this.resolveProjectIdForIssue(String(id));
+    const issue = await this.getIssueRaw(projectId, id);
 
     const raw: any[] = Array.isArray(issue?.attachments)
       ? issue.attachments
@@ -332,7 +404,8 @@ export class PlaneAdapter implements Adapter {
 
   async listLinkedWorkItems(id: string): Promise<Array<{ id: string; title: string }>> {
     // Best-effort: relation schemas vary.
-    const issue = await this.getIssueRaw(id);
+    const projectId = await this.resolveProjectIdForIssue(String(id));
+    const issue = await this.getIssueRaw(projectId, id);
 
     const rels: any[] = Array.isArray(issue?.relations)
       ? issue.relations
@@ -355,7 +428,8 @@ export class PlaneAdapter implements Adapter {
   }
 
   async setStage(id: string, stage: StageKey): Promise<void> {
-    const states = await this.listStatesRaw();
+    const projectId = await this.resolveProjectIdForIssue(String(id));
+    const states = await this.listStatesRaw(projectId);
 
     const state = states.find((s) => {
       if (!s?.name) return false;
@@ -366,7 +440,7 @@ export class PlaneAdapter implements Adapter {
     const stateId = state?.id;
     if (!stateId) {
       throw new Error(
-        `No Plane state found mapping to ${stage}. Check your stageMap and Plane states (workspace=${this.workspaceSlug}, project=${this.projectId}).`,
+        `No Plane state found mapping to ${stage}. Check your stageMap and Plane states (workspace=${this.workspaceSlug}, project=${projectId}).`,
       );
     }
 
@@ -375,7 +449,7 @@ export class PlaneAdapter implements Adapter {
       'issues',
       'update',
       '-p',
-      this.projectId,
+      projectId,
       id,
       '--state',
       stateId,
@@ -391,7 +465,22 @@ export class PlaneAdapter implements Adapter {
   }
 
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
-    const rawIssues = await this.listIssuesRaw();
-    return this.mapIssuesToSnapshot(rawIssues);
+    const all = await this.listIssuesAllProjectsRaw();
+    const combined: unknown[] = [];
+    for (const { projectId, issues } of all) {
+      for (const x of issues as any[]) {
+        if (x && typeof x === 'object' && !('projectId' in (x as any))) {
+          (x as any).projectId = projectId;
+        }
+      }
+      combined.push(...issues);
+    }
+    const snap = this.mapIssuesToSnapshot(combined);
+    // update index
+    for (const [id, item] of snap) {
+      const raw = item.raw as any;
+      if (raw?.projectId) this.issueProjectIndex.set(id, String(raw.projectId));
+    }
+    return snap;
   }
 }

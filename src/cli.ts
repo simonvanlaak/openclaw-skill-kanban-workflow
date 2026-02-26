@@ -149,14 +149,62 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         };
       } else if (adapterKind === 'plane') {
         const workspaceSlug = String(flags['plane-workspace-slug'] ?? '').trim();
+        const scope = String(flags['plane-scope'] ?? 'project').trim();
         const projectId = String(flags['plane-project-id'] ?? '').trim();
         if (!workspaceSlug) throw new Error('setup --adapter plane requires --plane-workspace-slug <slug>');
-        if (!projectId) throw new Error('setup --adapter plane requires --plane-project-id <uuid>');
+
+        if (scope !== 'project' && scope !== 'all-projects') {
+          throw new Error('setup --adapter plane: --plane-scope must be project|all-projects');
+        }
+
+        if (scope === 'project' && !projectId) {
+          throw new Error('setup --adapter plane --plane-scope project requires --plane-project-id <uuid>');
+        }
+
+        const adapterTmp = new PlaneAdapter({
+          workspaceSlug,
+          projectId: scope === 'project' ? projectId : undefined,
+          stageMap,
+          orderField: flags['plane-order-field'] ? String(flags['plane-order-field']) : undefined,
+        });
+
+        let projectIds: string[] | undefined;
+        if (scope === 'all-projects') {
+          const out = await (adapterTmp as any).cli.run(['projects', 'list', '-f', 'json']);
+          const parsed = out.trim().length > 0 ? JSON.parse(out) : [];
+          const arr: any[] = Array.isArray(parsed)
+            ? parsed
+            : parsed?.results && Array.isArray(parsed.results)
+              ? parsed.results
+              : [];
+          projectIds = arr.map((p: any) => String(p?.id)).filter((x) => x && x !== 'undefined');
+          if (projectIds.length === 0) {
+            throw new Error('plane --plane-scope all-projects: no projects discovered');
+          }
+
+          // Validate state name consistency: all mapped keys must exist in every project.
+          const requiredNames = Object.keys(stageMap);
+          for (const pid of projectIds) {
+            const statesOut = await (adapterTmp as any).cli.run(['states', 'list', '-p', pid, '-f', 'json']);
+            const statesParsed = statesOut.trim().length > 0 ? JSON.parse(statesOut) : [];
+            const statesArr: any[] = Array.isArray(statesParsed)
+              ? statesParsed
+              : statesParsed?.results && Array.isArray(statesParsed.results)
+                ? statesParsed.results
+                : [];
+            const names = new Set(statesArr.map((s: any) => String(s?.name)).filter(Boolean));
+            const missing = requiredNames.filter((n) => !names.has(n));
+            if (missing.length > 0) {
+              throw new Error(`Plane state names mismatch for project ${pid}: missing ${missing.join(', ')}`);
+            }
+          }
+        }
 
         adapterCfg = {
           kind: 'plane',
           workspaceSlug,
-          projectId,
+          projectId: scope === 'project' ? projectId : undefined,
+          projectIds: scope === 'all-projects' ? projectIds : undefined,
           orderField: flags['plane-order-field'] ? String(flags['plane-order-field']) : undefined,
           stageMap,
         };
@@ -352,7 +400,13 @@ async function adapterFromConfig(cfg: any): Promise<any> {
     case 'linear':
       return new LinearAdapter({ viewId: cfg.viewId, teamId: cfg.teamId, projectId: cfg.projectId, stageMap: cfg.stageMap });
     case 'plane':
-      return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId, orderField: cfg.orderField, stageMap: cfg.stageMap });
+      return new PlaneAdapter({
+        workspaceSlug: cfg.workspaceSlug,
+        projectId: cfg.projectId,
+        projectIds: cfg.projectIds,
+        orderField: cfg.orderField,
+        stageMap: cfg.stageMap,
+      });
     case 'planka':
       return new PlankaAdapter({ stageMap: cfg.stageMap, boardId: cfg.boardId, backlogListId: cfg.backlogListId, bin: cfg.bin });
     default:

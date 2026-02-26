@@ -51,7 +51,10 @@ export const ClawbanConfigV1Schema = z.object({
     z.object({
       kind: z.literal('plane'),
       workspaceSlug: z.string().min(1),
-      projectId: z.string().min(1),
+      /** Single project scope (legacy). */
+      projectId: z.string().min(1).optional(),
+      /** Multi-project scope (preferred for autopilot). */
+      projectIds: z.array(z.string().min(1)).optional(),
       /** Explicit ordering field name when UI order can't be discovered. */
       orderField: z.string().min(1).optional(),
       stageMap: StageMapSchema,
