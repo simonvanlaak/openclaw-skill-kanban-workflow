@@ -69,7 +69,27 @@ describe('cli what-next tips', () => {
   it('prints a what-next tip after setup', async () => {
     const { io, cap } = createIo();
 
-    const code = await runCli(['setup', '--stage-map-json', '{}', '--planka'], io);
+    const code = await runCli(
+      [
+        'setup',
+        '--adapter',
+        'planka',
+        '--force',
+        '--map-backlog',
+        'Backlog',
+        '--map-blocked',
+        'Blocked',
+        '--map-in-progress',
+        'In Progress',
+        '--map-in-review',
+        'In Review',
+        '--planka-board-id',
+        'b1',
+        '--planka-backlog-list-id',
+        'l1',
+      ],
+      io,
+    );
 
     expect(code).toBe(0);
     expect(runSetup).toHaveBeenCalledOnce();
@@ -99,12 +119,20 @@ describe('cli what-next tips', () => {
     expect(cap.out.join('')).toMatch(/or `clawban update --id <id> --text/);
   });
 
-  it('errors with setup instructions when config is missing/invalid', async () => {
+  it.each([
+    ['show', ['show', '--id', '1']],
+    ['next', ['next']],
+    ['start', ['start', '--id', '1']],
+    ['update', ['update', '--id', '1', '--text', 'x']],
+    ['ask', ['ask', '--id', '1', '--text', 'x']],
+    ['complete', ['complete', '--id', '1', '--summary', 'x']],
+    ['create', ['create', '--title', 't', '--body', 'b']],
+  ])('errors with setup instructions when config is missing/invalid (%s)', async (_name, argv) => {
     const { io, cap } = createIo();
 
     vi.mocked(loadConfigFromFile).mockRejectedValueOnce(new Error('ENOENT'));
 
-    const code = await runCli(['next'], io);
+    const code = await runCli(argv, io);
 
     expect(code).toBe(1);
     expect(cap.err.join('')).toMatch(/Setup not completed/i);

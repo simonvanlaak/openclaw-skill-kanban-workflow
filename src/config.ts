@@ -50,6 +50,10 @@ export const ClawbanConfigV1Schema = z.object({
     }),
     z.object({
       kind: z.literal('planka'),
+      /** Board scope for listing cards. */
+      boardId: z.string().min(1),
+      /** Needed for explicit backlog ordering by card position. */
+      backlogListId: z.string().min(1),
       bin: z.string().optional(),
       stageMap: StageMapSchema,
     }),

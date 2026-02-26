@@ -87,55 +87,83 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     if (cmd === 'setup') {
       const force = Boolean(flags.force);
 
-      const stageMapJson = String(flags['stage-map-json'] ?? '').trim();
-      if (!stageMapJson) {
-        throw new Error('setup requires --stage-map-json (platformName -> canonical stage key mapping)');
+      const adapterKind = String(flags.adapter ?? '').trim();
+      if (!adapterKind) throw new Error('setup requires --adapter <github|plane|linear|planka>');
+
+      const mapBacklog = String(flags['map-backlog'] ?? '').trim();
+      const mapBlocked = String(flags['map-blocked'] ?? '').trim();
+      const mapInProgress = String(flags['map-in-progress'] ?? '').trim();
+      const mapInReview = String(flags['map-in-review'] ?? '').trim();
+
+      if (!mapBacklog || !mapBlocked || !mapInProgress || !mapInReview) {
+        throw new Error('setup requires all stage mappings: --map-backlog, --map-blocked, --map-in-progress, --map-in-review');
       }
-      const stageMap = JSON.parse(stageMapJson);
 
-      const selected: any[] = [];
+      const stageMap: Record<string, string> = {
+        [mapBacklog]: 'stage:backlog',
+        [mapBlocked]: 'stage:blocked',
+        [mapInProgress]: 'stage:in-progress',
+        [mapInReview]: 'stage:in-review',
+      };
 
-      if (flags['github-repo']) {
-        const repo = String(flags['github-repo']);
-        const owner = flags['github-project-owner'] ? String(flags['github-project-owner']) : undefined;
+      // Detect accidental duplicates (which would silently drop a mapping).
+      if (new Set([mapBacklog, mapBlocked, mapInProgress, mapInReview]).size !== 4) {
+        throw new Error('setup stage mapping values must be unique (a platform stage/list/status can only map to one canonical stage)');
+      }
+
+      let adapterCfg: any;
+
+      if (adapterKind === 'github') {
+        const repo = String(flags['github-repo'] ?? '').trim();
+        if (!repo) throw new Error('setup --adapter github requires --github-repo <owner/repo>');
+
         const number = flags['github-project-number'] ? Number(flags['github-project-number']) : undefined;
-        selected.push({
+        const owner = repo.includes('/') ? repo.split('/')[0] : undefined;
+
+        adapterCfg = {
           kind: 'github',
           repo,
           project: owner && number ? { owner, number } : undefined,
           stageMap,
-        });
-      }
+        };
+      } else if (adapterKind === 'linear') {
+        const teamId = flags['linear-team-id'] ? String(flags['linear-team-id']) : undefined;
+        const projectId = flags['linear-project-id'] ? String(flags['linear-project-id']) : undefined;
 
-      if (flags['linear-view-id'] || flags['linear-team-id'] || flags['linear-project-id']) {
-        selected.push({
+        if ((teamId ? 1 : 0) + (projectId ? 1 : 0) !== 1) {
+          throw new Error('setup --adapter linear requires exactly one scope: --linear-team-id <id> OR --linear-project-id <id>');
+        }
+
+        adapterCfg = {
           kind: 'linear',
           viewId: flags['linear-view-id'] ? String(flags['linear-view-id']) : undefined,
-          teamId: flags['linear-team-id'] ? String(flags['linear-team-id']) : undefined,
-          projectId: flags['linear-project-id'] ? String(flags['linear-project-id']) : undefined,
+          teamId,
+          projectId,
           stageMap,
-        });
-      }
+        };
+      } else if (adapterKind === 'plane') {
+        const workspaceSlug = String(flags['plane-workspace-slug'] ?? '').trim();
+        const projectId = String(flags['plane-project-id'] ?? '').trim();
+        if (!workspaceSlug) throw new Error('setup --adapter plane requires --plane-workspace-slug <slug>');
+        if (!projectId) throw new Error('setup --adapter plane requires --plane-project-id <uuid>');
 
-      if (flags['plane-workspace'] && flags['plane-project-id']) {
-        selected.push({
+        adapterCfg = {
           kind: 'plane',
-          workspaceSlug: String(flags['plane-workspace']),
-          projectId: String(flags['plane-project-id']),
+          workspaceSlug,
+          projectId,
           orderField: flags['plane-order-field'] ? String(flags['plane-order-field']) : undefined,
           stageMap,
-        });
-      }
+        };
+      } else if (adapterKind === 'planka') {
+        const boardId = String(flags['planka-board-id'] ?? '').trim();
+        const backlogListId = String(flags['planka-backlog-list-id'] ?? '').trim();
+        if (!boardId) throw new Error('setup --adapter planka requires --planka-board-id <id>');
+        if (!backlogListId) throw new Error('setup --adapter planka requires --planka-backlog-list-id <id>');
 
-      if (flags['planka']) {
-        selected.push({ kind: 'planka', stageMap });
+        adapterCfg = { kind: 'planka', boardId, backlogListId, stageMap };
+      } else {
+        throw new Error(`Unknown adapter kind: ${adapterKind}`);
       }
-
-      if (selected.length !== 1) {
-        throw new Error(`setup requires selecting exactly one adapter; found ${selected.length}`);
-      }
-
-      const adapterCfg = selected[0];
 
       await runSetup({
         fs,
@@ -270,7 +298,7 @@ async function adapterFromConfig(cfg: any): Promise<any> {
     case 'plane':
       return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId, orderField: cfg.orderField, stageMap: cfg.stageMap });
     case 'planka':
-      return new PlankaAdapter({ stageMap: cfg.stageMap, bin: cfg.bin });
+      return new PlankaAdapter({ stageMap: cfg.stageMap, boardId: cfg.boardId, backlogListId: cfg.backlogListId, bin: cfg.bin });
     default:
       throw new Error(`Unknown adapter kind: ${cfg.kind}`);
   }

@@ -17,13 +17,24 @@ export class PlankaAdapter implements Adapter {
   private readonly cli: CliRunner;
   private readonly listArgs: readonly string[];
   private readonly stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
+  private readonly boardId: string;
+  private readonly backlogListId: string;
 
-  constructor(opts: { stageMap: Readonly<Record<string, import('../stage.js').StageKey>>; bin?: string; listArgs?: readonly string[] }) {
+  constructor(opts: {
+    stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
+    boardId: string;
+    backlogListId: string;
+    bin?: string;
+    listArgs?: readonly string[];
+  }) {
     // Uses https://github.com/voydz/planka-cli
     this.cli = new CliRunner(opts?.bin ?? 'planka-cli');
     // NOTE: planka-cli output flags may differ by version. Override listArgs if needed.
-    this.listArgs = opts?.listArgs ?? ['cards', 'list', '--json'];
+    // Prefer scoping by board when supported; fall back to a global list otherwise.
+    this.listArgs = opts?.listArgs ?? ['cards', 'list', '--json', '--boardId', opts.boardId];
     this.stageMap = opts.stageMap;
+    this.boardId = opts.boardId;
+    this.backlogListId = opts.backlogListId;
   }
 
   name(): string {
@@ -122,7 +133,10 @@ export class PlankaAdapter implements Adapter {
         .default([])
         .transform((arr) => arr.map((x) => x.name)),
       list: z
-        .object({ name: z.string() })
+        .object({
+          id: z.union([z.string(), z.number()]).transform((v) => String(v)).optional(),
+          name: z.string(),
+        })
         .optional(),
     });
 

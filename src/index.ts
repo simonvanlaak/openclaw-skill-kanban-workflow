@@ -6,6 +6,8 @@ export * from './adapter.js';
 export * from './runner.js';
 export * from './adapters/index.js';
 
+export * from './automation/progress_updates.js';
+
 export * from './config.js';
 export * from './setup.js';
 export * from './verbs/next_selection.js';
