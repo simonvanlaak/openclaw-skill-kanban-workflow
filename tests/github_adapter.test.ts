@@ -10,7 +10,7 @@ import { execa } from 'execa';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { GitHubAdapter } from '../src/github_adapter.js';
+import { GitHubAdapter } from '../src/adapters/github.js';
 
 type ExecaMock = typeof execa & {
   mockResolvedValueOnce: (value: unknown) => unknown;

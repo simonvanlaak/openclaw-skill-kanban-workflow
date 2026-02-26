@@ -1,10 +1,11 @@
-import { execa } from 'execa';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
-export class GhCliError extends Error {
-  override name = 'GhCliError';
-}
+import type { Adapter } from '../adapter.js';
+import type { WorkItem } from '../models.js';
+import { Stage } from '../stage.js';
+
+import { CliRunner } from './cli.js';
 
 export type GitHubIssue = {
   number: number;
@@ -43,21 +44,14 @@ function toIsoZ(dt: Date): string {
   return dt.toISOString();
 }
 
-export class GhCli {
-  async run(args: string[]): Promise<string> {
-    try {
-      const proc = await execa('gh', args, {
-        stdout: 'pipe',
-        stderr: 'pipe'
-      });
-      return proc.stdout;
-    } catch (err: any) {
-      const message = typeof err?.message === 'string' ? err.message : String(err);
-      const stderr = typeof err?.stderr === 'string' ? err.stderr : '';
-      throw new GhCliError(
-        `gh command failed: gh ${args.join(' ')}\n${message}${stderr ? `\n${stderr}` : ''}`.trim()
-      );
-    }
+function pickStageLabel(labels: readonly string[]): string | undefined {
+  const stageLabels = labels.filter((l) => l.toLowerCase().startsWith('stage:')).sort();
+  return stageLabels[0];
+}
+
+export class GhCli extends CliRunner {
+  constructor() {
+    super('gh');
   }
 }
 
@@ -76,7 +70,7 @@ type Snapshot = Record<string, SnapshotIssue> & {
   };
 };
 
-export class GitHubAdapter {
+export class GitHubAdapter implements Adapter {
   private readonly repo: string;
   private readonly snapshotPath: string;
   private readonly gh: GhCli;
@@ -85,6 +79,36 @@ export class GitHubAdapter {
     this.repo = opts.repo;
     this.snapshotPath = opts.snapshotPath;
     this.gh = opts.gh ?? new GhCli();
+  }
+
+  name(): string {
+    return `github:${this.repo}`;
+  }
+
+  async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
+    const issues = await this.listOpenIssuesWithStageLabels({ limit: 200 });
+    const items = new Map<string, WorkItem>();
+
+    for (const issue of issues) {
+      const stageLabel = pickStageLabel(issue.labels);
+      if (!stageLabel) continue;
+
+      items.set(String(issue.number), {
+        id: String(issue.number),
+        title: issue.title,
+        stage: Stage.fromAny(stageLabel),
+        url: issue.url,
+        labels: issue.labels,
+        updatedAt: issue.updatedAt,
+        raw: {
+          number: issue.number,
+          state: issue.state,
+          updatedAt: issue.updatedAt.toISOString(),
+        },
+      });
+    }
+
+    return items;
   }
 
   async listOpenIssuesWithStageLabels(opts?: { limit?: number }): Promise<GitHubIssue[]> {
