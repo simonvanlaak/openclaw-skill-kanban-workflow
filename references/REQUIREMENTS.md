@@ -85,6 +85,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 - Must apply/encode `stage:backlog`.
 - Must assign to the agent identity.
 - Keep `create` minimal for now (no linked-ticket relationships created at creation time).
+- `create` does **not** auto-start; it leaves the task in `stage:backlog`.
 
 ## Not required (explicitly)
 
@@ -103,6 +104,7 @@ Reopening should happen automatically when a human comments on a task that is:
 
 Reopen target stage:
 - On human comment, automatically move the task to `stage:backlog`.
+- Auto-reopen is silent (no automatic comment is posted).
 
 ## CLI identity discovery (“self”) requirement
 
@@ -145,8 +147,8 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - Should the agent post an automatic acknowledgement comment?
 
 4) **Message formats:**
-   - Should `update/ask/complete` comments be plain Markdown, HTML, or platform-native?
-   - Should Clawban standardize a small template (prefixes like "Update:" / "Clarification needed:" / "Completed:")?
+   - All user-provided text for `update/ask/complete` is **Markdown**.
+   - Adapters may convert Markdown to platform-native formats if required, but Markdown is the canonical input.
 
 ## Implementation notes (for later)
 
