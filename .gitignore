@@ -26,6 +26,7 @@ coverage/
 # Local runtime/config
 .tmp/
 config/clawban.json
+config/kanban-workflow.json
 
 # OS
 .DS_Store

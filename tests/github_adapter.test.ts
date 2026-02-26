@@ -153,4 +153,59 @@ describe('GitHubAdapter', () => {
       removed: ['bug']
     });
   });
+
+  it('addComment uses gh issue comment (id/body)', async () => {
+    (execa as any as ExecaMock).mockResolvedValueOnce({ stdout: '' });
+
+    const adapter = new GitHubAdapter({
+      repo: 'o/r',
+      snapshotPath,
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
+
+    await adapter.addComment('123', 'hello');
+
+    expect(execa).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'comment', '123', '--repo', 'o/r', '--body', 'hello'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+  });
+
+  it('listAttachments extracts github.com/user-attachments URLs from the body', async () => {
+    (execa as any as ExecaMock).mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        body: 'See https://github.com/user-attachments/files/12345/demo.txt and https://github.com/user-attachments/assets/aaa-bbb'
+      })
+    });
+
+    const adapter = new GitHubAdapter({
+      repo: 'o/r',
+      snapshotPath,
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
+
+    const attachments = await adapter.listAttachments('9');
+
+    expect(execa).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'view', '9', '--repo', 'o/r', '--json', 'body'],
+      { stdout: 'pipe', stderr: 'pipe' },
+    );
+
+    expect(attachments).toEqual([
+      { filename: 'demo.txt', url: 'https://github.com/user-attachments/files/12345/demo.txt' },
+      { filename: 'aaa-bbb', url: 'https://github.com/user-attachments/assets/aaa-bbb' },
+    ]);
+  });
 });

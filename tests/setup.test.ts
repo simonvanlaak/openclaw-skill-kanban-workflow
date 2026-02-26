@@ -32,13 +32,13 @@ function createMemoryFs(initial: Record<string, string> = {}) {
 
 describe('setup', () => {
   it('requires --force to overwrite existing config', async () => {
-    const fs = createMemoryFs({ 'config/clawban.json': '{"x":1}' });
+    const fs = createMemoryFs({ 'config/kanban-workflow.json': '{"x":1}' });
     const validate = vi.fn(async () => undefined);
 
     await expect(
       runSetup({
         fs,
-        configPath: 'config/clawban.json',
+        configPath: 'config/kanban-workflow.json',
         force: false,
         config: {
           version: 1,
@@ -69,7 +69,7 @@ describe('setup', () => {
     await expect(
       runSetup({
         fs,
-        configPath: 'config/clawban.json',
+        configPath: 'config/kanban-workflow.json',
         force: true,
         config: {
           version: 1,
@@ -88,7 +88,7 @@ describe('setup', () => {
       }),
     ).rejects.toThrow(/not authenticated/);
 
-    expect(fs.exists('config/clawban.json')).toBe(false);
+    expect(fs.exists('config/kanban-workflow.json')).toBe(false);
   });
 
   it('writes config after successful validation', async () => {
@@ -97,7 +97,7 @@ describe('setup', () => {
 
     await runSetup({
       fs,
-      configPath: 'config/clawban.json',
+      configPath: 'config/kanban-workflow.json',
       force: true,
       config: {
         version: 1,
@@ -116,7 +116,7 @@ describe('setup', () => {
     });
 
     expect(validate).toHaveBeenCalledOnce();
-    expect(fs.exists('config/clawban.json')).toBe(true);
-    expect(fs.get('config/clawban.json')).toMatch(/"github"/);
+    expect(fs.exists('config/kanban-workflow.json')).toBe(true);
+    expect(fs.get('config/kanban-workflow.json')).toMatch(/"github"/);
   });
 });

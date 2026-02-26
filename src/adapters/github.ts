@@ -145,45 +145,45 @@ export class GitHubAdapter implements Adapter {
       });
   }
 
-  async addComment(opts: { issueNumber: number; body: string }): Promise<void> {
+  async addComment(id: string, body: string): Promise<void> {
     await this.gh.run([
       'issue',
       'comment',
-      String(opts.issueNumber),
+      String(id),
       '--repo',
       this.repo,
       '--body',
-      opts.body
+      body,
     ]);
   }
 
-  async addLabels(opts: { issueNumber: number; labels: Iterable<string> }): Promise<void> {
-    const labels = Array.from(opts.labels);
-    if (labels.length === 0) return;
+  private async addLabelsToIssue(issueNumber: number, labels: Iterable<string>): Promise<void> {
+    const arr = Array.from(labels);
+    if (arr.length === 0) return;
 
     await this.gh.run([
       'issue',
       'edit',
-      String(opts.issueNumber),
+      String(issueNumber),
       '--repo',
       this.repo,
       '--add-label',
-      labels.join(',')
+      arr.join(','),
     ]);
   }
 
-  async removeLabels(opts: { issueNumber: number; labels: Iterable<string> }): Promise<void> {
-    const labels = Array.from(opts.labels);
-    if (labels.length === 0) return;
+  private async removeLabelsFromIssue(issueNumber: number, labels: Iterable<string>): Promise<void> {
+    const arr = Array.from(labels);
+    if (arr.length === 0) return;
 
     await this.gh.run([
       'issue',
       'edit',
-      String(opts.issueNumber),
+      String(issueNumber),
       '--repo',
       this.repo,
       '--remove-label',
-      labels.join(',')
+      arr.join(','),
     ]);
   }
 
@@ -335,9 +335,33 @@ export class GitHubAdapter implements Adapter {
     return sorted.slice(0, opts.limit);
   }
 
-  async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
-    // GitHub doesn't expose structured attachments for issues via gh issue view.
-    return [];
+  async listAttachments(id: string): Promise<Array<{ filename: string; url: string }>> {
+    // GitHub doesn't expose structured attachments, but uploaded issue attachments
+    // commonly appear as `github.com/user-attachments/...` URLs in the body.
+    const out = await this.gh.run([
+      'issue',
+      'view',
+      String(id),
+      '--repo',
+      this.repo,
+      '--json',
+      'body',
+    ]);
+
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    const body = typeof parsed.body === 'string' ? parsed.body : '';
+
+    const urls = (body.match(/https:\/\/github\.com\/user-attachments\/[\w\-./?%#=]+/g) ?? [])
+      .map((u) => u.replace(/[)"'>\]]+$/, ''));
+
+    const uniq = Array.from(new Set(urls));
+
+    return uniq.map((url) => {
+      const clean = url.split('?')[0];
+      const parts = clean.split('/').filter(Boolean);
+      const last = parts[parts.length - 1] ?? 'attachment';
+      return { filename: last, url };
+    });
   }
 
   async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
@@ -357,10 +381,10 @@ export class GitHubAdapter implements Adapter {
     const toRemove = knownStageLabels.filter((l) => l !== desiredPlatform);
 
     if (toRemove.length > 0) {
-      await this.removeLabels({ issueNumber: Number(id), labels: toRemove });
+      await this.removeLabelsFromIssue(Number(id), toRemove);
     }
     if (!details.labels.includes(desiredPlatform)) {
-      await this.addLabels({ issueNumber: Number(id), labels: [desiredPlatform] });
+      await this.addLabelsToIssue(Number(id), [desiredPlatform]);
     }
   }
 

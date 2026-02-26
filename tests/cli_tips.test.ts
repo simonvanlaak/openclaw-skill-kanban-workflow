@@ -93,7 +93,7 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(0);
     expect(runSetup).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/Wrote config\/clawban\.json/);
+    expect(cap.out.join('')).toMatch(/Wrote config\/kanban-workflow\.json/);
     expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow next`/);
   });
 

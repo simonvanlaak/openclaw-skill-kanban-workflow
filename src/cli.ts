@@ -40,7 +40,7 @@ function writeWhatNext(io: CliIo, cmd: string): void {
 }
 
 function writeSetupRequiredError(io: CliIo): void {
-  io.stderr.write('Setup not completed: missing or invalid config/clawban.json\n');
+  io.stderr.write('Setup not completed: missing or invalid config/kanban-workflow.json\n');
   io.stderr.write('What next: run `kanban-workflow setup`\n');
 }
 
@@ -77,11 +77,11 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
 
 export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.stdout, stderr: process.stderr }): Promise<number> {
   const { cmd, flags } = parseArgs(rawArgv);
-  const configPath = 'config/clawban.json';
+  const configPath = 'config/kanban-workflow.json';
 
   try {
     if (flags.config) {
-      throw new Error('Only a single config file is supported: config/clawban.json (no --config override)');
+      throw new Error('Only a single config file is supported: config/kanban-workflow.json (no --config override)');
     }
 
     if (cmd === 'setup') {
