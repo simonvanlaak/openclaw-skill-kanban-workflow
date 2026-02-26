@@ -1,5 +1,7 @@
 import * as fs from 'node:fs/promises';
 
+import { execa } from 'execa';
+
 import { loadConfigFromFile } from './config.js';
 import { runSetup } from './setup.js';
 import { GitHubAdapter } from './adapters/github.js';
@@ -171,6 +173,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       const autopilotCronExpr = String(flags['autopilot-cron-expr'] ?? '*/5 * * * *').trim();
       const autopilotTz = flags['autopilot-cron-tz'] ? String(flags['autopilot-cron-tz']).trim() : undefined;
+      const autopilotInstallCron = Boolean(flags['autopilot-install-cron']);
 
       await runSetup({
         fs,
@@ -211,6 +214,42 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       io.stdout.write(
         `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`kanban-workflow autopilot-tick\`.\n`,
       );
+
+      if (autopilotInstallCron) {
+        const tz = autopilotTz ?? '';
+        const message = [
+          'Autopilot tick (kanban-workflow):',
+          '',
+          '- Run: kanban-workflow autopilot-tick',
+          '- If it starts a ticket, a separate always-on agent should do the actual work (read `show`, implement, `update`/`ask`, then `complete`).',
+          '',
+          'This job was created by `kanban-workflow setup --autopilot-install-cron`.',
+        ].join('\n');
+
+        const args = [
+          'cron',
+          'add',
+          '--name',
+          'kanban-workflow autopilot tick',
+          '--session',
+          'isolated',
+          '--cron',
+          autopilotCronExpr,
+          '--exact',
+          '--message',
+          message,
+          '--no-deliver',
+          '--json',
+        ];
+
+        if (tz) {
+          args.push('--tz', tz);
+        }
+
+        const out = await execa('openclaw', args);
+        io.stdout.write(`Installed OpenClaw cron job: ${out.stdout.trim()}\n`);
+      }
+
       writeWhatNext(io, cmd);
       return 0;
     }

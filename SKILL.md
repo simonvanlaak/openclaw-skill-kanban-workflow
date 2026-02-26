@@ -114,6 +114,11 @@ Required:
 - `kanban-workflow setup --adapter <github|plane|linear|planka> ...`
 - stage mapping flags: `--map-backlog`, `--map-blocked`, `--map-in-progress`, `--map-in-review`
 
+Optional autopilot scheduling:
+- `--autopilot-cron-expr "*/5 * * * *"` (default)
+- `--autopilot-cron-tz "Europe/Berlin"` (optional)
+- `--autopilot-install-cron` (creates an OpenClaw cron job that runs `kanban-workflow autopilot-tick`)
+
 Adapter flags (summary):
 - GitHub: `--github-repo <owner/repo>`, optional `--github-project-number <number>`
 - Plane: `--plane-workspace-slug <slug>`, `--plane-project-id <uuid>`, optional `--plane-order-field <field>`
