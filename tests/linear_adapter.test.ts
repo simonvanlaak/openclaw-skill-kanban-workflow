@@ -37,7 +37,7 @@ describe('LinearAdapter', () => {
                 title: 'Queued',
                 url: 'https://linear.example/issue/l2',
                 updatedAt: '2026-02-26T08:31:00Z',
-                state: { name: 'stage:queued' },
+                state: { name: 'stage:backlog' },
               },
             ],
           },
@@ -47,16 +47,22 @@ describe('LinearAdapter', () => {
 
     const adapter = new LinearAdapter({
       teamId: 'team-123',
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
     });
 
     const snap = await adapter.fetchSnapshot();
 
     expect(Array.from(snap.keys())).toEqual(['l2']);
-    expect(snap.get('l2')?.stage.toString()).toBe('stage:queued');
+    expect(snap.get('l2')?.stage.toString()).toBe('stage:backlog');
     expect(snap.get('l2')?.updatedAt?.toISOString()).toBe('2026-02-26T08:31:00.000Z');
   });
 
-  it('supports calling a2c directly via bin + baseArgs and supports stateMap', async () => {
+  it('supports calling a2c directly via bin + baseArgs and supports stageMap', async () => {
     (execa as any as ExecaMock).mockResolvedValueOnce({
       stdout: JSON.stringify({
         data: {
@@ -77,7 +83,7 @@ describe('LinearAdapter', () => {
       projectId: 'proj-123',
       bin: 'a2c',
       baseArgs: ['--config', '/tmp/linear-cli/a2c', '--workspace', 'linear'],
-      stateMap: {
+      stageMap: {
         Doing: 'stage:in-progress',
       },
     });

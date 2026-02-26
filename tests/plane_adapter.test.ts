@@ -32,8 +32,8 @@ describe('PlaneAdapter', () => {
           name: 'Queued',
           url: 'https://plane.example/issues/i2',
           updated_at: '2026-02-26T08:31:00Z',
-          state: { name: 'stage:queued' },
-          labels: [{ name: 'bug' }, { name: 'stage:queued' }]
+          state: { name: 'stage:backlog' },
+          labels: [{ name: 'bug' }, { name: 'stage:backlog' }]
         }
       ])
     });
@@ -41,17 +41,23 @@ describe('PlaneAdapter', () => {
     const adapter = new PlaneAdapter({
       workspaceSlug: 'ws',
       projectId: 'proj',
-      bin: 'plane'
+      bin: 'plane',
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
     });
 
     const snap = await adapter.fetchSnapshot();
 
     expect(Array.from(snap.keys())).toEqual(['i2']);
-    expect(snap.get('i2')?.stage.toString()).toBe('stage:queued');
-    expect(snap.get('i2')?.labels).toEqual(['bug', 'stage:queued']);
+    expect(snap.get('i2')?.stage.toString()).toBe('stage:backlog');
+    expect(snap.get('i2')?.labels).toEqual(['bug', 'stage:backlog']);
   });
 
-  it('supports mapping non-canonical Plane state names via stateMap', async () => {
+  it('supports mapping non-canonical Plane state names via stageMap', async () => {
     (execa as any as ExecaMock).mockResolvedValueOnce({
       stdout: JSON.stringify([
         {
@@ -65,9 +71,9 @@ describe('PlaneAdapter', () => {
     const adapter = new PlaneAdapter({
       workspaceSlug: 'ws',
       projectId: 'proj',
-      stateMap: {
-        Doing: 'stage:in-progress'
-      }
+      stageMap: {
+        Doing: 'stage:in-progress',
+      },
     });
 
     const snap = await adapter.fetchSnapshot();

@@ -13,9 +13,9 @@ export type CliIo = {
   stderr: { write(chunk: string): void };
 };
 
-function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean> } {
+function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
   const [cmd = 'help', ...rest] = argv;
-  const flags: Record<string, string | boolean> = {};
+  const flags: Record<string, string | boolean | string[]> = {};
 
   for (let i = 0; i < rest.length; i++) {
     const tok = rest[i];
@@ -23,11 +23,21 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
 
     const key = tok.slice(2);
     const next = rest[i + 1];
-    if (next && !next.startsWith('--')) {
-      flags[key] = next;
-      i++;
+
+    const value: string | boolean = next && !next.startsWith('--') ? next : true;
+    if (value !== true) i++;
+
+    const prev = flags[key];
+    if (prev === undefined) {
+      flags[key] = value;
+    } else if (typeof prev === 'string') {
+      flags[key] = [prev, String(value)];
+    } else if (Array.isArray(prev)) {
+      prev.push(String(value));
+      flags[key] = prev;
     } else {
-      flags[key] = true;
+      // prev was boolean true; promote to array of strings
+      flags[key] = [String(value)];
     }
   }
 
@@ -36,58 +46,96 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
 
 export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.stdout, stderr: process.stderr }): Promise<number> {
   const { cmd, flags } = parseArgs(rawArgv);
-  const configPath = String(flags.config ?? 'config/clawban.json');
+  if (flags.config) {
+    throw new Error('Only a single config file is supported: config/clawban.json (no --config override)');
+  }
+  const configPath = 'config/clawban.json';
 
   try {
     if (cmd === 'setup') {
       const force = Boolean(flags.force);
 
-      const adapters: any[] = [];
+      const stageMapJson = String(flags['stage-map-json'] ?? '').trim();
+      if (!stageMapJson) {
+        throw new Error('setup requires --stage-map-json (platformName -> canonical stage key mapping)');
+      }
+      const stageMap = JSON.parse(stageMapJson);
+
+      const selected: any[] = [];
 
       if (flags['github-repo']) {
         const repo = String(flags['github-repo']);
         const owner = flags['github-project-owner'] ? String(flags['github-project-owner']) : undefined;
         const number = flags['github-project-number'] ? Number(flags['github-project-number']) : undefined;
-        adapters.push({
+        selected.push({
           kind: 'github',
           repo,
           project: owner && number ? { owner, number } : undefined,
+          stageMap,
         });
       }
 
       if (flags['linear-view-id'] || flags['linear-team-id'] || flags['linear-project-id']) {
-        adapters.push({
+        selected.push({
           kind: 'linear',
           viewId: flags['linear-view-id'] ? String(flags['linear-view-id']) : undefined,
           teamId: flags['linear-team-id'] ? String(flags['linear-team-id']) : undefined,
           projectId: flags['linear-project-id'] ? String(flags['linear-project-id']) : undefined,
+          stageMap,
         });
       }
 
       if (flags['plane-workspace'] && flags['plane-project-id']) {
-        adapters.push({
+        selected.push({
           kind: 'plane',
           workspaceSlug: String(flags['plane-workspace']),
           projectId: String(flags['plane-project-id']),
           orderField: flags['plane-order-field'] ? String(flags['plane-order-field']) : undefined,
+          stageMap,
         });
       }
 
       if (flags['planka']) {
-        adapters.push({ kind: 'planka' });
+        selected.push({ kind: 'planka', stageMap });
       }
+
+      if (selected.length !== 1) {
+        throw new Error(`setup requires selecting exactly one adapter; found ${selected.length}`);
+      }
+
+      const adapterCfg = selected[0];
 
       await runSetup({
         fs,
         configPath,
         force,
-        config: { version: 1, adapters },
+        config: { version: 1, adapter: adapterCfg },
         validate: async () => {
-          // Run adapter validations (whoami + backlog list), read-only.
-          for (const a of adapters) {
-            const adapter = await adapterFromConfig(a);
-            await adapter.whoami();
-            await adapter.listBacklogIdsInOrder();
+          // Validate ALL read-only verb prerequisites.
+          const adapter = await adapterFromConfig(adapterCfg);
+          await adapter.whoami();
+
+          // next prerequisites
+          await adapter.listBacklogIdsInOrder();
+          await adapter.listIdsByStage('stage:backlog');
+          await adapter.listIdsByStage('stage:blocked');
+          await adapter.listIdsByStage('stage:in-progress');
+          await adapter.listIdsByStage('stage:in-review');
+
+          // show prerequisites (best-effort: validate on at least one work item if any exist)
+          const candidates = [
+            ...(await adapter.listIdsByStage('stage:backlog')),
+            ...(await adapter.listIdsByStage('stage:blocked')),
+            ...(await adapter.listIdsByStage('stage:in-progress')),
+            ...(await adapter.listIdsByStage('stage:in-review')),
+          ];
+
+          const id = candidates[0];
+          if (id) {
+            await adapter.getWorkItem(id);
+            await adapter.listComments(id, { limit: 1, newestFirst: true, includeInternal: true });
+            await adapter.listAttachments(id);
+            await adapter.listLinkedWorkItems(id);
           }
         },
       });
@@ -97,11 +145,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     const config = await loadConfigFromFile({ fs, path: configPath });
-    const kind = (flags.adapter ? String(flags.adapter) : config.adapters[0]?.kind) ?? '';
-    const adapterCfg = flags.adapter ? config.adapters.find((a: any) => a.kind === kind) : config.adapters[0];
-    if (!adapterCfg) throw new Error(`No adapter config found for kind=${kind || '(none)'} in ${configPath}`);
-
-    const adapter = await adapterFromConfig(adapterCfg);
+    const adapter = await adapterFromConfig(config.adapter);
 
     if (cmd === 'show') {
       const id = String(flags.id ?? '');
@@ -168,13 +212,18 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 async function adapterFromConfig(cfg: any): Promise<any> {
   switch (cfg.kind) {
     case 'github':
-      return new GitHubAdapter({ repo: cfg.repo, snapshotPath: 'data/github_snapshot.json', project: cfg.project });
+      return new GitHubAdapter({
+        repo: cfg.repo,
+        snapshotPath: 'data/github_snapshot.json',
+        project: cfg.project,
+        stageMap: cfg.stageMap,
+      });
     case 'linear':
-      return new LinearAdapter({ viewId: cfg.viewId, teamId: cfg.teamId, projectId: cfg.projectId });
+      return new LinearAdapter({ viewId: cfg.viewId, teamId: cfg.teamId, projectId: cfg.projectId, stageMap: cfg.stageMap });
     case 'plane':
-      return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId, orderField: cfg.orderField });
+      return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId, orderField: cfg.orderField, stageMap: cfg.stageMap });
     case 'planka':
-      return new PlankaAdapter();
+      return new PlankaAdapter({ stageMap: cfg.stageMap, bin: cfg.bin });
     default:
       throw new Error(`Unknown adapter kind: ${cfg.kind}`);
   }

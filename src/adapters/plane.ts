@@ -33,7 +33,7 @@ export class PlaneAdapter implements Adapter {
   private readonly baseArgs: readonly string[];
   private readonly workspaceSlug: string;
   private readonly projectId: string;
-  private readonly stateMap: Readonly<Record<string, string>>;
+  private readonly stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
   private readonly orderField?: string;
 
   constructor(opts: {
@@ -41,8 +41,8 @@ export class PlaneAdapter implements Adapter {
     projectId: string;
     bin?: string;
     baseArgs?: readonly string[];
-    /** Optional mapping: Plane state name -> canonical stage key (or any Stage.fromAny input). */
-    stateMap?: Readonly<Record<string, string>>;
+    /** Required mapping: Plane state/list names -> canonical stage key. */
+    stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
     /** Explicit ordering field name when UI order can't be discovered. */
     orderField?: string;
   }) {
@@ -50,7 +50,7 @@ export class PlaneAdapter implements Adapter {
     this.baseArgs = opts.baseArgs ?? [];
     this.workspaceSlug = opts.workspaceSlug;
     this.projectId = opts.projectId;
-    this.stateMap = opts.stateMap ?? {};
+    this.stageMap = opts.stageMap;
     this.orderField = opts.orderField;
   }
 
@@ -169,6 +169,10 @@ export class PlaneAdapter implements Adapter {
     return [];
   }
 
+  async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
+    return [];
+  }
+
   async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
     return [];
   }
@@ -229,15 +233,13 @@ export class PlaneAdapter implements Adapter {
       const stateName = issue.state?.name ?? issue.state_detail?.name;
       if (!stateName) continue;
 
-      const stageSource = this.stateMap[stateName] ?? stateName;
-
-      let stage: Stage;
-      try {
-        stage = Stage.fromAny(stageSource);
-      } catch {
-        // If Plane states don't match canonical stages, skip rather than mis-classify.
+      const mapped = this.stageMap[stateName];
+      if (!mapped) {
+        // Ignore states not mapped into the canonical set.
         continue;
       }
+
+      const stage = Stage.fromAny(mapped);
 
       const updatedAtRaw = issue.updatedAt ?? issue.updated_at;
 

@@ -5,17 +5,21 @@ import type { CreateInput, ShowPayload, VerbAdapter } from './types.js';
 
 export async function show(adapter: VerbAdapter, id: string): Promise<ShowPayload> {
   const item = await adapter.getWorkItem(id);
-  const linked = await adapter.listLinkedWorkItems(id);
-  const comments = await adapter.listComments(id, {
-    limit: 10,
-    newestFirst: true,
-    includeInternal: true,
-  });
+  const [linked, comments, attachments] = await Promise.all([
+    adapter.listLinkedWorkItems(id),
+    adapter.listComments(id, {
+      limit: 10,
+      newestFirst: true,
+      includeInternal: true,
+    }),
+    adapter.listAttachments(id),
+  ]);
 
   return {
     adapter: adapter.name(),
     item: {
       ...item,
+      attachments,
       linked,
     },
     comments,

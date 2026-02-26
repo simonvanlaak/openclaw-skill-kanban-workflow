@@ -1,41 +1,59 @@
 import { z } from 'zod';
 
+import { CANONICAL_STAGE_KEYS, StageKeySchema } from './stage.js';
+
+const StageMapSchema = z
+  .record(z.string().min(1), StageKeySchema)
+  .superRefine((map, ctx) => {
+    const values = new Set(Object.values(map));
+    for (const key of CANONICAL_STAGE_KEYS) {
+      if (!values.has(key)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `stageMap must include a mapping for canonical stage ${key}`,
+        });
+      }
+    }
+  });
+
 export const ClawbanConfigV1Schema = z.object({
   version: z.literal(1),
-  adapters: z
-    .array(
-      z.discriminatedUnion('kind', [
-        z.object({
-          kind: z.literal('github'),
-          repo: z.string().min(1),
-          project: z
-            .object({
-              number: z.number().int().positive(),
-              owner: z.string().min(1),
-            })
-            .optional(),
-        }),
-        z.object({
-          kind: z.literal('linear'),
-          /** Configure explicit ordering via Linear view id (manual view order). */
-          viewId: z.string().optional(),
-          teamId: z.string().optional(),
-          projectId: z.string().optional(),
-        }),
-        z.object({
-          kind: z.literal('plane'),
-          workspaceSlug: z.string().min(1),
-          projectId: z.string().min(1),
-          /** Optional explicit ordering field for Plane when it can't be discovered. */
-          orderField: z.string().min(1).optional(),
-        }),
-        z.object({
-          kind: z.literal('planka'),
-          bin: z.string().optional(),
-        }),
-      ]),
-    )
-    .default([]),
+  adapter: z.discriminatedUnion('kind', [
+    z.object({
+      kind: z.literal('github'),
+      repo: z.string().min(1),
+      /** Explicit ordering source: GitHub Project number (optional). */
+      project: z
+        .object({
+          number: z.number().int().positive(),
+          owner: z.string().min(1),
+        })
+        .optional(),
+      stageMap: StageMapSchema,
+    }),
+    z.object({
+      kind: z.literal('linear'),
+      /** Explicit ordering via Linear view id (manual view order). */
+      viewId: z.string().optional(),
+      /** Provide either teamId OR projectId when viewId is not provided (exactly one). */
+      teamId: z.string().optional(),
+      projectId: z.string().optional(),
+      stageMap: StageMapSchema,
+    }),
+    z.object({
+      kind: z.literal('plane'),
+      workspaceSlug: z.string().min(1),
+      projectId: z.string().min(1),
+      /** Explicit ordering field name when UI order can't be discovered. */
+      orderField: z.string().min(1).optional(),
+      stageMap: StageMapSchema,
+    }),
+    z.object({
+      kind: z.literal('planka'),
+      bin: z.string().optional(),
+      stageMap: StageMapSchema,
+    }),
+  ]),
 });
 
 export type ClawbanConfigV1 = z.infer<typeof ClawbanConfigV1Schema>;

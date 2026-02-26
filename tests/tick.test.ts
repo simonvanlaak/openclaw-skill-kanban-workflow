@@ -8,10 +8,10 @@ import type { WorkItem } from '../src/models.js';
 describe('tick', () => {
   it('returns adapter name, snapshot, and diff events', async () => {
     const snapshot1: Record<string, WorkItem> = {
-      x: { id: 'x', title: 'X', stage: Stage.fromAny('queued'), labels: [], raw: {} },
+      x: { id: 'x', title: 'X', stage: Stage.fromAny('stage:backlog'), labels: [], raw: {} },
     };
     const snapshot2: Record<string, WorkItem> = {
-      x: { id: 'x', title: 'X2', stage: Stage.fromAny('queued'), labels: [], raw: {} },
+      x: { id: 'x', title: 'X2', stage: Stage.fromAny('stage:backlog'), labels: [], raw: {} },
     };
 
     let call = 0;

@@ -40,7 +40,19 @@ describe('setup', () => {
         fs,
         configPath: 'config/clawban.json',
         force: false,
-        config: { version: 1, adapters: [] },
+        config: {
+          version: 1,
+          adapter: {
+            kind: 'github',
+            repo: 'o/r',
+            stageMap: {
+              'stage:backlog': 'stage:backlog',
+              'stage:blocked': 'stage:blocked',
+              'stage:in-progress': 'stage:in-progress',
+              'stage:in-review': 'stage:in-review',
+            },
+          },
+        },
         validate,
       }),
     ).rejects.toThrow(/--force/i);
@@ -59,7 +71,19 @@ describe('setup', () => {
         fs,
         configPath: 'config/clawban.json',
         force: true,
-        config: { version: 1, adapters: [] },
+        config: {
+          version: 1,
+          adapter: {
+            kind: 'github',
+            repo: 'o/r',
+            stageMap: {
+              'stage:backlog': 'stage:backlog',
+              'stage:blocked': 'stage:blocked',
+              'stage:in-progress': 'stage:in-progress',
+              'stage:in-review': 'stage:in-review',
+            },
+          },
+        },
         validate,
       }),
     ).rejects.toThrow(/not authenticated/);
@@ -75,7 +99,19 @@ describe('setup', () => {
       fs,
       configPath: 'config/clawban.json',
       force: true,
-      config: { version: 1, adapters: [{ kind: 'github', repo: 'o/r' }] },
+      config: {
+        version: 1,
+        adapter: {
+          kind: 'github',
+          repo: 'o/r',
+          stageMap: {
+            'stage:backlog': 'stage:backlog',
+            'stage:blocked': 'stage:blocked',
+            'stage:in-progress': 'stage:in-progress',
+            'stage:in-review': 'stage:in-review',
+          },
+        },
+      },
       validate,
     });
 

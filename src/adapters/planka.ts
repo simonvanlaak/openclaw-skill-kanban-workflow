@@ -16,12 +16,14 @@ import { Stage } from '../stage.js';
 export class PlankaAdapter implements Adapter {
   private readonly cli: CliRunner;
   private readonly listArgs: readonly string[];
+  private readonly stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
 
-  constructor(opts?: { bin?: string; listArgs?: readonly string[] }) {
+  constructor(opts: { stageMap: Readonly<Record<string, import('../stage.js').StageKey>>; bin?: string; listArgs?: readonly string[] }) {
     // Uses https://github.com/voydz/planka-cli
     this.cli = new CliRunner(opts?.bin ?? 'planka-cli');
     // NOTE: planka-cli output flags may differ by version. Override listArgs if needed.
     this.listArgs = opts?.listArgs ?? ['cards', 'list', '--json'];
+    this.stageMap = opts.stageMap;
   }
 
   name(): string {
@@ -85,6 +87,10 @@ export class PlankaAdapter implements Adapter {
     return [];
   }
 
+  async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
+    return [];
+  }
+
   async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
     return [];
   }
@@ -126,17 +132,11 @@ export class PlankaAdapter implements Adapter {
     const items = new Map<string, WorkItem>();
 
     for (const card of cards) {
-      const stageLabel = card.labels.find((l) => l.toLowerCase().startsWith('stage:'));
-      const stageSource = stageLabel ?? card.list?.name;
+      const stageLabel = card.labels.find((l) => this.stageMap[l] !== undefined);
+      const stageSource = stageLabel ?? (card.list?.name ? this.stageMap[card.list.name] : undefined);
       if (!stageSource) continue;
 
-      let stage: Stage;
-      try {
-        stage = Stage.fromAny(stageSource);
-      } catch {
-        // If list/labels don't match canonical stages, skip rather than mis-classify.
-        continue;
-      }
+      const stage = Stage.fromAny(stageSource);
 
       items.set(card.id, {
         id: card.id,

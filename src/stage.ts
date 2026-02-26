@@ -2,12 +2,9 @@ import { z } from 'zod';
 
 export const CANONICAL_STAGE_KEYS = [
   'stage:backlog',
-  'stage:queued',
-  'stage:needs-clarification',
-  'stage:ready-to-implement',
+  'stage:blocked',
   'stage:in-progress',
   'stage:in-review',
-  'stage:blocked',
 ] as const;
 
 export const StageKeySchema = z.enum(CANONICAL_STAGE_KEYS);

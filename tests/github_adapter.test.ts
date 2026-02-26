@@ -52,16 +52,25 @@ describe('GitHubAdapter', () => {
           url: 'u2',
           state: 'open',
           updatedAt: iso('2026-02-26T08:31:00Z'),
-          labels: [{ name: 'z' }, { name: 'stage:queued' }, { name: 'a' }]
+          labels: [{ name: 'z' }, { name: 'stage:backlog' }, { name: 'a' }]
         }
       ])
     });
 
-    const adapter = new GitHubAdapter({ repo: 'o/r', snapshotPath });
+    const adapter = new GitHubAdapter({
+      repo: 'o/r',
+      snapshotPath,
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
     const items = await adapter.listOpenIssuesWithStageLabels();
 
     expect(items.map((i) => i.number)).toEqual([2]);
-    expect(items[0]?.labels).toEqual(['stage:queued', 'a', 'z']);
+    expect(items[0]?.labels).toEqual(['stage:backlog', 'a', 'z']);
   });
 
   it('pollEventsSince emits created + persists snapshot', async () => {
@@ -73,19 +82,28 @@ describe('GitHubAdapter', () => {
           url: 'u10',
           state: 'open',
           updatedAt: iso('2026-02-26T08:40:00Z'),
-          labels: [{ name: 'stage:queued' }]
+          labels: [{ name: 'stage:backlog' }]
         }
       ])
     });
 
-    const adapter = new GitHubAdapter({ repo: 'o/r', snapshotPath });
+    const adapter = new GitHubAdapter({
+      repo: 'o/r',
+      snapshotPath,
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
     const events = await adapter.pollEventsSince({ since: new Date('2026-02-26T08:39:00Z') });
 
     expect(events).toHaveLength(1);
     expect(events[0]?.kind).toBe('created');
 
     const snap = JSON.parse(await fs.readFile(snapshotPath, 'utf-8'));
-    expect(snap['10']?.labels).toEqual(['stage:queued']);
+    expect(snap['10']?.labels).toEqual(['stage:backlog']);
     expect(snap._meta?.repo).toBe('o/r');
   });
 
@@ -95,7 +113,7 @@ describe('GitHubAdapter', () => {
       JSON.stringify({
         '7': {
           updatedAt: '2026-02-26T08:00:00.000Z',
-          labels: ['stage:queued', 'bug'],
+          labels: ['stage:backlog', 'bug'],
           title: 'T',
           url: 'u7',
           state: 'open'
@@ -111,12 +129,21 @@ describe('GitHubAdapter', () => {
           url: 'u7',
           state: 'open',
           updatedAt: iso('2026-02-26T08:10:00Z'),
-          labels: [{ name: 'stage:queued' }, { name: 'enhancement' }]
+          labels: [{ name: 'stage:backlog' }, { name: 'enhancement' }]
         }
       ])
     });
 
-    const adapter = new GitHubAdapter({ repo: 'o/r', snapshotPath });
+    const adapter = new GitHubAdapter({
+      repo: 'o/r',
+      snapshotPath,
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
     const events = await adapter.pollEventsSince({ since: new Date('2026-02-26T08:09:00Z') });
 
     expect(events).toHaveLength(1);

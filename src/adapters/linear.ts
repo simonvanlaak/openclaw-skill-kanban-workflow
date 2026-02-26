@@ -47,8 +47,8 @@ export type LinearAdapterOptions = {
   teamId?: string;
   projectId?: string;
 
-  /** Map Linear workflow state name -> canonical StageKey. */
-  stateMap?: Readonly<Record<string, StageKey>>;
+  /** Map Linear workflow state/list names -> canonical StageKey. Required for all 4 canonical stages. */
+  stageMap: Readonly<Record<string, StageKey>>;
 };
 
 /**
@@ -68,7 +68,7 @@ export class LinearAdapter implements Adapter {
   private readonly viewId?: string;
   private readonly teamId?: string;
   private readonly projectId?: string;
-  private readonly stateMap: Readonly<Record<string, StageKey>>;
+  private readonly stageMap: Readonly<Record<string, StageKey>>;
 
   constructor(opts: LinearAdapterOptions) {
     this.cli = new CliRunner(opts.bin ?? 'linear');
@@ -76,7 +76,7 @@ export class LinearAdapter implements Adapter {
     this.viewId = opts.viewId;
     this.teamId = opts.teamId;
     this.projectId = opts.projectId;
-    this.stateMap = opts.stateMap ?? {};
+    this.stageMap = opts.stageMap;
   }
 
   name(): string {
@@ -149,6 +149,10 @@ export class LinearAdapter implements Adapter {
     return [];
   }
 
+  async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
+    return [];
+  }
+
   async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
     return [];
   }
@@ -202,15 +206,13 @@ export class LinearAdapter implements Adapter {
       const stateName = node.state?.name;
       if (!stateName) continue;
 
-      const mapped = this.stateMap[stateName];
-      let stage: Stage;
-
-      try {
-        stage = mapped ? Stage.fromAny(mapped) : Stage.fromAny(stateName);
-      } catch {
-        // If the workflow state isn't part of our canonical set (and isn't mapped), skip it.
+      const mapped = this.stageMap[stateName];
+      if (!mapped) {
+        // Ignore states not mapped into the canonical set.
         continue;
       }
+
+      const stage = Stage.fromAny(mapped);
 
       const updatedAt = node.updatedAt ? new Date(node.updatedAt) : undefined;
       if (updatedAt && Number.isNaN(updatedAt.getTime())) {

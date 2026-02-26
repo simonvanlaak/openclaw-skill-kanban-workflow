@@ -49,6 +49,8 @@ function pickStageLabel(labels: readonly string[]): string | undefined {
   return stageLabels[0];
 }
 
+/* pickFirst removed */
+
 export class GhCli extends CliRunner {
   constructor() {
     super('gh');
@@ -75,10 +77,19 @@ export class GitHubAdapter implements Adapter {
   private readonly snapshotPath: string;
   private readonly gh: GhCli;
   private readonly project?: { owner: string; number: number };
+  /** Platform stage label -> canonical stage key. */
+  private readonly stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
 
-  constructor(opts: { repo: string; snapshotPath: string; gh?: GhCli; project?: { owner: string; number: number } }) {
+  constructor(opts: {
+    repo: string;
+    snapshotPath: string;
+    stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
+    gh?: GhCli;
+    project?: { owner: string; number: number };
+  }) {
     this.repo = opts.repo;
     this.snapshotPath = opts.snapshotPath;
+    this.stageMap = opts.stageMap;
     this.gh = opts.gh ?? new GhCli();
     this.project = opts.project;
   }
@@ -87,18 +98,23 @@ export class GitHubAdapter implements Adapter {
     return `github:${this.repo}`;
   }
 
+  // (stage mapping helpers live below under pickPlatformStage/platformStagesFor)
+
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
     const issues = await this.listOpenIssuesWithStageLabels({ limit: 200 });
     const items = new Map<string, WorkItem>();
 
     for (const issue of issues) {
-      const stageLabel = pickStageLabel(issue.labels);
+      const stageLabel = this.pickPlatformStage(issue.labels);
       if (!stageLabel) continue;
+
+      const mapped = this.stageMap[stageLabel];
+      if (!mapped) continue;
 
       items.set(String(issue.number), {
         id: String(issue.number),
         title: issue.title,
-        stage: Stage.fromAny(stageLabel),
+        stage: Stage.fromAny(mapped),
         url: issue.url,
         labels: issue.labels,
         updatedAt: issue.updatedAt,
@@ -173,6 +189,22 @@ export class GitHubAdapter implements Adapter {
 
   // ---- Verb-level (workflow) API ----
 
+  private pickPlatformStage(labels: readonly string[]): string | undefined {
+    // Prefer the first stage label that exists in the configured stageMap.
+    const mapped = labels.filter((l) => this.stageMap[l] !== undefined).sort();
+    if (mapped.length > 0) return mapped[0];
+
+    // Back-compat: fall back to any stage:* label.
+    return pickStageLabel(labels);
+  }
+
+  private platformStagesFor(stage: import('../stage.js').StageKey): string[] {
+    return Object.entries(this.stageMap)
+      .filter(([, canonical]) => canonical === stage)
+      .map(([platform]) => platform)
+      .sort();
+  }
+
   async whoami(): Promise<{ username: string }> {
     const out = await this.gh.run(['api', 'user', '--jq', '.login']);
     const login = out.trim().replaceAll('"', '');
@@ -180,14 +212,28 @@ export class GitHubAdapter implements Adapter {
     return { username: login };
   }
 
-  async listIdsByStage(stage: string): Promise<string[]> {
-    const issues = await this.listIssues({ state: 'open', limit: 200, search: `label:${stage}` });
-    return issues.map((i) => String(i.number));
+  async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
+    const platformStages = this.platformStagesFor(stage);
+    if (platformStages.length === 0) {
+      throw new Error(`No platform stage mapped for canonical ${stage}`);
+    }
+
+    // GH search doesn't support OR across labels easily; merge results.
+    const ids: string[] = [];
+    for (const platform of platformStages) {
+      const issues = await this.listIssues({ state: 'open', limit: 200, search: `label:${platform}` });
+      ids.push(...issues.map((i) => String(i.number)));
+    }
+
+    return [...new Set(ids)];
   }
 
   async listBacklogIdsInOrder(): Promise<string[]> {
     const all = await this.listOpenIssuesWithStageLabels({ limit: 200 });
-    const backlog = all.filter((i) => i.labels.includes('stage:backlog'));
+    const backlog = all.filter((i) => {
+      const platform = this.pickPlatformStage(i.labels);
+      return platform ? this.stageMap[platform] === 'stage:backlog' : false;
+    });
 
     const byUpdatedDesc = [...backlog].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
     if (!this.project) {
@@ -236,8 +282,11 @@ export class GitHubAdapter implements Adapter {
 
     const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
     const labels = (parsed.labels ?? []).map((l: any) => String(l.name)).sort();
-    const stageLabel = pickStageLabel(labels);
-    if (!stageLabel) throw new Error(`Issue ${id} missing stage:* label`);
+    const stageLabel = this.pickPlatformStage(labels);
+    if (!stageLabel) throw new Error(`Issue ${id} missing mapped stage label`);
+
+    const mapped = this.stageMap[stageLabel];
+    if (!mapped) throw new Error(`Issue ${id} stage label ${stageLabel} is not mapped in config`);
 
     const assignees = (parsed.assignees ?? []).map((a: any) => ({ username: a?.login, name: a?.name }));
 
@@ -245,7 +294,7 @@ export class GitHubAdapter implements Adapter {
       id: String(parsed.number ?? id),
       title: String(parsed.title ?? ''),
       url: parsed.url ? String(parsed.url) : undefined,
-      stage: Stage.fromAny(stageLabel).key,
+      stage: Stage.fromAny(mapped).key,
       body: parsed.body ? String(parsed.body) : undefined,
       labels,
       assignees,
@@ -256,7 +305,7 @@ export class GitHubAdapter implements Adapter {
   async listComments(
     id: string,
     opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
-  ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { username?: string } }>> {
+  ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { username?: string; name?: string } }>> {
     void opts.includeInternal; // GitHub issue comments have no "internal" concept.
 
     const out = await this.gh.run([
@@ -274,7 +323,7 @@ export class GitHubAdapter implements Adapter {
       id: String(c.id ?? ''),
       body: String(c.body ?? ''),
       createdAt: c.createdAt ? parseGitHubDate(String(c.createdAt)) : undefined,
-      author: c.author ? { username: String(c.author.login ?? '') } : undefined,
+      author: c.author ? { username: String(c.author.login ?? ''), name: c.author.name ? String(c.author.name) : undefined } : undefined,
     }));
 
     const sorted = [...comments].sort((a: any, b: any) => {
@@ -286,6 +335,11 @@ export class GitHubAdapter implements Adapter {
     return sorted.slice(0, opts.limit);
   }
 
+  async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
+    // GitHub doesn't expose structured attachments for issues via gh issue view.
+    return [];
+  }
+
   async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
     // TODO: GitHub linked/related issues require GraphQL or parsing timeline items.
     return [];
@@ -293,20 +347,34 @@ export class GitHubAdapter implements Adapter {
 
   async setStage(id: string, stage: import('../stage.js').StageKey): Promise<void> {
     const details = await this.getWorkItem(id);
-    const currentStageLabels = details.labels.filter((l) => l.toLowerCase().startsWith('stage:'));
-    const desired = stage;
 
-    const toRemove = currentStageLabels.filter((l) => l !== desired);
+    const desiredPlatform = this.platformStagesFor(stage)[0];
+    if (!desiredPlatform) {
+      throw new Error(`No platform stage mapped for canonical ${stage}`);
+    }
+
+    const knownStageLabels = details.labels.filter((l) => this.stageMap[l] !== undefined);
+    const toRemove = knownStageLabels.filter((l) => l !== desiredPlatform);
+
     if (toRemove.length > 0) {
       await this.removeLabels({ issueNumber: Number(id), labels: toRemove });
     }
-    if (!details.labels.includes(desired)) {
-      await this.addLabels({ issueNumber: Number(id), labels: [desired] });
+    if (!details.labels.includes(desiredPlatform)) {
+      await this.addLabels({ issueNumber: Number(id), labels: [desiredPlatform] });
     }
   }
 
   async createInBacklogAndAssignToSelf(input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
     const self = await this.whoami();
+    if (!self.username) {
+      throw new Error('Unable to self-assign: gh whoami did not return username');
+    }
+
+    const backlogLabel = this.platformStagesFor('stage:backlog')[0];
+    if (!backlogLabel) {
+      throw new Error('Unable to create in backlog: no platform stage mapped to stage:backlog');
+    }
+
     const out = await this.gh.run([
       'issue',
       'create',
@@ -319,7 +387,7 @@ export class GitHubAdapter implements Adapter {
       '--assignee',
       self.username,
       '--label',
-      'stage:backlog'
+      backlogLabel
     ]);
 
     const url = out.trim();

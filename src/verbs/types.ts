@@ -13,6 +13,11 @@ export type WorkItemLink = {
   relation?: string;
 };
 
+export type WorkItemAttachment = {
+  filename: string;
+  url: string;
+};
+
 export type WorkItemDetails = {
   id: string;
   title: string;
@@ -22,6 +27,7 @@ export type WorkItemDetails = {
   labels: string[];
   assignees?: Actor[];
   updatedAt?: Date;
+  attachments?: WorkItemAttachment[];
   linked?: WorkItemLink[];
 };
 
@@ -55,6 +61,7 @@ export type VerbAdapter = {
   listBacklogIdsInOrder(): Promise<string[]>;
   getWorkItem(id: string): Promise<WorkItemDetails>;
   listComments(id: string, opts: { limit: number; newestFirst: boolean; includeInternal: boolean }): Promise<WorkItemComment[]>;
+  listAttachments(id: string): Promise<WorkItemAttachment[]>;
   listLinkedWorkItems(id: string): Promise<WorkItemLink[]>;
 
   // Write
