@@ -44,6 +44,87 @@ export class PlaneAdapter implements Adapter {
     return 'plane';
   }
 
+  // ---- Verb-level (workflow) API (best-effort; depends on plane-cli surface) ----
+
+  async whoami(): Promise<{ id?: string; username?: string; name?: string }> {
+    const out = await this.cli.run([
+      ...this.baseArgs,
+      'request',
+      this.workspaceSlug,
+      '/api/v1/users/me/',
+    ]);
+
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    return {
+      id: parsed?.id ? String(parsed.id) : undefined,
+      username: parsed?.email ? String(parsed.email) : undefined,
+      name: parsed?.display_name ? String(parsed.display_name) : parsed?.name ? String(parsed.name) : undefined,
+    };
+  }
+
+  async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
+    const snap = await this.fetchSnapshot();
+    return [...snap.values()]
+      .filter((i) => i.stage.key === stage)
+      .map((i) => i.id);
+  }
+
+  async listBacklogIdsInOrder(): Promise<string[]> {
+    const snap = await this.fetchSnapshot();
+    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+
+    // Assume the CLI output order is the UI order; fallback to updatedAt desc when available.
+    const ordered = [...backlog].sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+    return ordered.map((i) => i.id);
+  }
+
+  async getWorkItem(id: string): Promise<{
+    id: string;
+    title: string;
+    url?: string;
+    stage: import('../stage.js').StageKey;
+    body?: string;
+    labels: string[];
+    updatedAt?: Date;
+  }> {
+    const snap = await this.fetchSnapshot();
+    const item = snap.get(id);
+    if (!item) throw new Error(`Plane work item not found: ${id}`);
+
+    return {
+      id: item.id,
+      title: item.title,
+      url: item.url,
+      stage: item.stage.key,
+      body: undefined,
+      labels: item.labels,
+      updatedAt: item.updatedAt,
+    };
+  }
+
+  async listComments(
+    _id: string,
+    _opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+  ): Promise<Array<{ id: string; body: string }>> {
+    return [];
+  }
+
+  async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
+    return [];
+  }
+
+  async setStage(_id: string, _stage: import('../stage.js').StageKey): Promise<void> {
+    throw new Error('PlaneAdapter.setStage not implemented (requires plane-cli write support)');
+  }
+
+  async addComment(_id: string, _body: string): Promise<void> {
+    throw new Error('PlaneAdapter.addComment not implemented (requires plane-cli write support)');
+  }
+
+  async createInBacklogAndAssignToSelf(_input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
+    throw new Error('PlaneAdapter.create not implemented (requires plane-cli write support)');
+  }
+
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
     const out = await this.cli.run([
       ...this.baseArgs,

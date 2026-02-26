@@ -74,11 +74,13 @@ export class GitHubAdapter implements Adapter {
   private readonly repo: string;
   private readonly snapshotPath: string;
   private readonly gh: GhCli;
+  private readonly project?: { owner: string; number: number };
 
-  constructor(opts: { repo: string; snapshotPath: string; gh?: GhCli }) {
+  constructor(opts: { repo: string; snapshotPath: string; gh?: GhCli; project?: { owner: string; number: number } }) {
     this.repo = opts.repo;
     this.snapshotPath = opts.snapshotPath;
     this.gh = opts.gh ?? new GhCli();
+    this.project = opts.project;
   }
 
   name(): string {
@@ -167,6 +169,191 @@ export class GitHubAdapter implements Adapter {
       '--remove-label',
       labels.join(',')
     ]);
+  }
+
+  // ---- Verb-level (workflow) API ----
+
+  async whoami(): Promise<{ username: string }> {
+    const out = await this.gh.run(['api', 'user', '--jq', '.login']);
+    const login = out.trim().replaceAll('"', '');
+    if (!login) throw new Error('gh api user did not return login');
+    return { username: login };
+  }
+
+  async listIdsByStage(stage: string): Promise<string[]> {
+    const issues = await this.listIssues({ state: 'open', limit: 200, search: `label:${stage}` });
+    return issues.map((i) => String(i.number));
+  }
+
+  async listBacklogIdsInOrder(): Promise<string[]> {
+    const all = await this.listOpenIssuesWithStageLabels({ limit: 200 });
+    const backlog = all.filter((i) => i.labels.includes('stage:backlog'));
+
+    const byUpdatedDesc = [...backlog].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+    if (!this.project) {
+      return byUpdatedDesc.map((i) => String(i.number));
+    }
+
+    const projectOrdered = await this.listProjectIssueNumbersInOrder({
+      owner: this.project.owner,
+      number: this.project.number,
+    });
+
+    const backlogByNumber = new Map(backlog.map((i) => [i.number, i] as const));
+    const picked: number[] = [];
+
+    for (const n of projectOrdered) {
+      if (backlogByNumber.has(n)) picked.push(n);
+    }
+
+    const pickedSet = new Set(picked);
+    for (const i of byUpdatedDesc) {
+      if (!pickedSet.has(i.number)) picked.push(i.number);
+    }
+
+    return picked.map(String);
+  }
+
+  async getWorkItem(id: string): Promise<{
+    id: string;
+    title: string;
+    url?: string;
+    stage: import('../stage.js').StageKey;
+    body?: string;
+    labels: string[];
+    assignees?: Array<{ username?: string; name?: string; id?: string }>;
+    updatedAt?: Date;
+  }> {
+    const out = await this.gh.run([
+      'issue',
+      'view',
+      String(id),
+      '--repo',
+      this.repo,
+      '--json',
+      'number,title,url,body,updatedAt,labels,assignees'
+    ]);
+
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    const labels = (parsed.labels ?? []).map((l: any) => String(l.name)).sort();
+    const stageLabel = pickStageLabel(labels);
+    if (!stageLabel) throw new Error(`Issue ${id} missing stage:* label`);
+
+    const assignees = (parsed.assignees ?? []).map((a: any) => ({ username: a?.login, name: a?.name }));
+
+    return {
+      id: String(parsed.number ?? id),
+      title: String(parsed.title ?? ''),
+      url: parsed.url ? String(parsed.url) : undefined,
+      stage: Stage.fromAny(stageLabel).key,
+      body: parsed.body ? String(parsed.body) : undefined,
+      labels,
+      assignees,
+      updatedAt: parsed.updatedAt ? parseGitHubDate(String(parsed.updatedAt)) : undefined,
+    };
+  }
+
+  async listComments(
+    id: string,
+    opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+  ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { username?: string } }>> {
+    void opts.includeInternal; // GitHub issue comments have no "internal" concept.
+
+    const out = await this.gh.run([
+      'issue',
+      'view',
+      String(id),
+      '--repo',
+      this.repo,
+      '--json',
+      'comments'
+    ]);
+
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    const comments = (parsed.comments ?? []).map((c: any) => ({
+      id: String(c.id ?? ''),
+      body: String(c.body ?? ''),
+      createdAt: c.createdAt ? parseGitHubDate(String(c.createdAt)) : undefined,
+      author: c.author ? { username: String(c.author.login ?? '') } : undefined,
+    }));
+
+    const sorted = [...comments].sort((a: any, b: any) => {
+      const at = a.createdAt ? a.createdAt.getTime() : 0;
+      const bt = b.createdAt ? b.createdAt.getTime() : 0;
+      return opts.newestFirst ? bt - at : at - bt;
+    });
+
+    return sorted.slice(0, opts.limit);
+  }
+
+  async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
+    // TODO: GitHub linked/related issues require GraphQL or parsing timeline items.
+    return [];
+  }
+
+  async setStage(id: string, stage: import('../stage.js').StageKey): Promise<void> {
+    const details = await this.getWorkItem(id);
+    const currentStageLabels = details.labels.filter((l) => l.toLowerCase().startsWith('stage:'));
+    const desired = stage;
+
+    const toRemove = currentStageLabels.filter((l) => l !== desired);
+    if (toRemove.length > 0) {
+      await this.removeLabels({ issueNumber: Number(id), labels: toRemove });
+    }
+    if (!details.labels.includes(desired)) {
+      await this.addLabels({ issueNumber: Number(id), labels: [desired] });
+    }
+  }
+
+  async createInBacklogAndAssignToSelf(input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
+    const self = await this.whoami();
+    const out = await this.gh.run([
+      'issue',
+      'create',
+      '--repo',
+      this.repo,
+      '--title',
+      input.title,
+      '--body',
+      input.body,
+      '--assignee',
+      self.username,
+      '--label',
+      'stage:backlog'
+    ]);
+
+    const url = out.trim();
+    const m = url.match(/\/issues\/(\d+)(?:\b|\/|$)/);
+    const id = m?.[1];
+    if (!id) {
+      throw new Error(`Unable to parse created issue number from gh output: ${JSON.stringify(out)}`);
+    }
+
+    return { id, url };
+  }
+
+  private async listProjectIssueNumbersInOrder(opts: { owner: string; number: number }): Promise<number[]> {
+    const out = await this.gh.run([
+      'project',
+      'item-list',
+      String(opts.number),
+      '--owner',
+      opts.owner,
+      '--limit',
+      '200',
+      '--format',
+      'json'
+    ]);
+
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    const items = Array.isArray(parsed.items) ? parsed.items : Array.isArray(parsed) ? parsed : [];
+
+    const numbers: number[] = [];
+    for (const item of items) {
+      const n = item?.content?.number;
+      if (typeof n === 'number') numbers.push(n);
+    }
+    return numbers;
   }
 
   async pollEventsSince(opts: { since: Date }): Promise<GitHubIssueEvent[]> {

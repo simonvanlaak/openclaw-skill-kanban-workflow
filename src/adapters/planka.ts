@@ -28,6 +28,79 @@ export class PlankaAdapter implements Adapter {
     return 'planka';
   }
 
+  // ---- Verb-level (workflow) API (best-effort; depends on planka-cli surface) ----
+
+  async whoami(): Promise<{ id?: string; username?: string; name?: string }> {
+    const node = new CliRunner('node');
+    const out = await node.run(['scripts/planka_whoami_json.mjs']);
+    const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
+    return {
+      name: parsed?.name ? String(parsed.name) : undefined,
+    };
+  }
+
+  async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
+    const snap = await this.fetchSnapshot();
+    return [...snap.values()]
+      .filter((i) => i.stage.key === stage)
+      .map((i) => i.id);
+  }
+
+  async listBacklogIdsInOrder(): Promise<string[]> {
+    const snap = await this.fetchSnapshot();
+    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+
+    // Planka card position is the explicit order; assume CLI returns cards in that order.
+    return backlog.map((i) => i.id);
+  }
+
+  async getWorkItem(id: string): Promise<{
+    id: string;
+    title: string;
+    url?: string;
+    stage: import('../stage.js').StageKey;
+    body?: string;
+    labels: string[];
+    updatedAt?: Date;
+  }> {
+    const snap = await this.fetchSnapshot();
+    const item = snap.get(id);
+    if (!item) throw new Error(`Planka card not found: ${id}`);
+
+    return {
+      id: item.id,
+      title: item.title,
+      url: item.url,
+      stage: item.stage.key,
+      body: undefined,
+      labels: item.labels,
+      updatedAt: item.updatedAt,
+    };
+  }
+
+  async listComments(
+    _id: string,
+    _opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+  ): Promise<Array<{ id: string; body: string }>> {
+    return [];
+  }
+
+  async listLinkedWorkItems(_id: string): Promise<Array<{ id: string; title: string }>> {
+    return [];
+  }
+
+  async setStage(_id: string, _stage: import('../stage.js').StageKey): Promise<void> {
+    throw new Error('PlankaAdapter.setStage not implemented (requires planka-cli write support)');
+  }
+
+  async addComment(_id: string, _body: string): Promise<void> {
+    throw new Error('PlankaAdapter.addComment not implemented (requires planka-cli write support)');
+  }
+
+  async createInBacklogAndAssignToSelf(_input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
+    throw new Error('PlankaAdapter.create not implemented (requires planka-cli write support)');
+  }
+
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
     const out = await this.cli.run(this.listArgs);
 
