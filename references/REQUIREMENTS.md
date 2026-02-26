@@ -24,16 +24,52 @@ Notes:
 
 Clawban must provide a `setup` command to configure enabled adapters and scope/order mappings.
 
-- Setup must be **flags-only / non-interactive** (scriptable).
-- Setup currently supports configuring **exactly one** active adapter (GitHub *or* Plane *or* Linear *or* Planka).
-- Setup must collect a **stage mapping** for the selected adapter: map platform-specific state/list names to the 4 canonical stages.
-  - Mapping is required for **all 4** canonical stages (no partial mapping).- Setup must test that required CLIs are installed and authenticated and **fail hard** if the selected adapter check fails.
-  - Setup must validate all **read-only verbs** for the selected adapter: `show` prerequisites (read body/description, list comments, list attachments where supported) and `next` prerequisites (list backlog + ordering inputs).
+### Setup command (flags-only)
+
+Setup must be **non-interactive** and configured entirely via flags.
+
+General:
+- `--adapter <github|plane|linear|planka>` (exactly one)
+- `--force` (required to overwrite an existing `config/clawban.json`)
+
+Stage mapping (required; all 4 stages):
+- `--map-backlog <platform-name>`
+- `--map-blocked <platform-name>`
+- `--map-in-progress <platform-name>`
+- `--map-in-review <platform-name>`
+
+Adapter-specific scope/order flags:
+
+**GitHub**
+- `--github-repo <owner/repo>`
+- `--github-project-number <number>` (explicit backlog ordering)
+
+**Plane**
+- `--plane-workspace-slug <slug>`
+- `--plane-project-id <uuid>`
+- Optional: `--plane-order-field <field>` (only if manual UI order is not detectable; otherwise fallback to updatedAt)
+
+**Linear**
+- Scope (choose exactly one):
+  - `--linear-team-id <id>` or
+  - `--linear-project-id <id>`
+- Ordering:
+  - `--linear-view-id <id>` (preferred; if not accessible, fallback to updatedAt)
+
+**Planka**
+- `--planka-board-id <id>`
+- `--planka-backlog-list-id <id>` (needed for backlog ordering by card position; other stages can be mapped by list name)
+
+### Setup validations
+
+- Setup must test that required CLIs are installed and authenticated and **fail hard** if the selected adapter check fails.
+- Setup must validate all **read-only verbs** for the selected adapter: `show` prerequisites (read body/description, list comments, list attachments where supported) and `next` prerequisites (list backlog + ordering inputs).
 - Setup validations are **read-only** (no comments/transitions/creates during setup).
-- Setup must configure the explicit human ordering source (e.g., GitHub Project selection) for the selected adapter.
+
+### Config
+
 - Config storage: store config in-repo (versionable) under `config/clawban.json`.
 - Only **one** config file/profile is supported (no multiple profiles).
-- `setup` must require an explicit `--force` to overwrite an existing `config/clawban.json`.
 
 ## Required verbs (MVP)
 
@@ -43,6 +79,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 
 - Input: platform scope + work item identifier.
 - Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), **attachments (filename + URL) where supported**, and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
+  - Each comment entry includes: **author + timestamp + content**.
 - Also include: titles of any linked/related tickets (e.g., blocks/blocked-by/duplicates) where supported.
 - Use case: follow linked/blocked tickets during implementation.
 
@@ -119,39 +156,36 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
 - **Planka:** `planka-cli status` shows the current user, but output is human-formatted.
   - **Recommended approach:** ship a small **wrapper script** (CLI-auth compliant) that returns `whoami` as **JSON** for Planka, rather than parsing formatted output.
 
-## Open questions
+## Clarified implementation rules
 
-1) **Definition of `next`:**
-   - **Guard:** first check whether the agent already has task(s) in `stage:in-progress`.
-     - If **exactly 1** task is in progress: `next` must return an error (do not assign a second task).
-     - If **more than 1** task is in progress: `next` must return an error (inconsistent state; requires human intervention).
-   - **Ignore in-review:** `next` ignores tickets in `stage:in-review`.
-   - **Eligible pool:** if there is nothing in progress, pull from `stage:backlog`.
-   - **Empty behavior:** if `stage:backlog` is empty, return an **info** response indicating there is no work to do.
-   - Scope input: repo/project/workspace/team.
-   - **Ordering:** if the platform supports a human-defined priority/custom order, `next` must respect it.
-     - **GitHub:** use **GitHub Project board ordering** as the explicit human-defined order.
-       - Configured during setup via **project number**.
-     - **Plane:** prefer the **manual order in the UI** if it is available via API/CLI output.
-       - If Plane manual order cannot be determined, fall back to **most recently updated first**.
-     - **Linear:** prefer the **manual order in a view** (configured during setup via **view id**) if it is accessible via CLI output.
-       - If Linear manual view order cannot be determined, fall back to **most recently updated first**.
-     - **Planka:** use **card position in the list** (after mapping lists → canonical stages).
-   - If no explicit order is available, fall back to **most recently updated first**.
+### `next`
 
-2) **`create` payload + assignment details:**
-   - `create` must accept: **title + description/body in Markdown**.
-   - Do we require applying `stage:backlog` via label/state/list *in addition* to the platform’s default state?
-   - For each platform, what identifier should be used for “assign to self”? (prefer CLI `whoami` JSON → stable user id)
+- Guard:
+  - If **exactly 1** task is in `stage:in-progress`: `next` returns an error (don’t assign a second task).
+  - If **more than 1** task is in `stage:in-progress`: `next` returns an error (inconsistent state).
+- Ignore `stage:in-review` for selection.
+- Eligible pool: select from `stage:backlog`.
+- Empty backlog: return an **info** response (“no work to do”).
+- Ordering:
+  - Prefer explicit human ordering when available (configured during setup; see adapter-specific flags).
+  - Otherwise fallback to `updatedAt` descending.
 
-3) **Auto-reopen policy details:**
-   - On human comment, reopen to which stage? (likely `stage:in-progress` vs `stage:ready-to-implement`)
-   - Should auto-reopen also un-block (i.e., remove `stage:blocked`) or just move stage?
-   - Should the agent post an automatic acknowledgement comment?
+### `create` stage + assignment
 
-4) **Message formats:**
-   - All user-provided text for `update/ask/complete` is **Markdown**.
-   - Adapters may convert Markdown to platform-native formats if required, but Markdown is the canonical input.
+- Input: title + Markdown body.
+- Stage on create: do **not** override platform defaults at runtime; rely on the platform configuration done during onboarding/setup.
+  - (I.e., the platform’s “new item” default should correspond to the mapped canonical `stage:backlog`.)
+- Assignment: must assign to self as discovered via the CLI `whoami` mechanism; **fail hard** if self cannot be resolved or assignment cannot be performed.
+
+### Auto-reopen
+
+- Trigger: human comment on a task in `stage:blocked` or `stage:in-review`.
+- Action: silently move the task to `stage:backlog`.
+
+### Message formats
+
+- All user-provided text for `update/ask/complete` is **Markdown**.
+- Adapters may convert Markdown to platform-native formats if required, but Markdown is the canonical input.
 
 ## Documentation requirements
 
