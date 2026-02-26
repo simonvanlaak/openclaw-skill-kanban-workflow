@@ -1,6 +1,6 @@
 ---
 name: clawban
-description: Core "Clawban" skill (TypeScript): a stage-based (stage:queued/needs-clarification/ready-to-implement/in-progress/in-review/blocked) project-management coworker architecture with CLI-auth adapters (gh, planka, openproject, etc.), runbooks/SOP assets, polling + snapshot-diff event synthesis, and cron/webhook-friendly entrypoints. Use when designing, implementing, or extending a pluggable PM integration layer for OpenClaw that avoids direct HTTP auth handling.
+description: Core "Clawban" skill (TypeScript): a stage-based (stage:backlog/blocked/in-progress/in-review) project-management coworker architecture with CLI-auth adapters (gh, planka, plane, linear), runbooks/SOP assets, polling + snapshot-diff event synthesis, and cron/webhook-friendly entrypoints. Use when designing, implementing, or extending a pluggable PM integration layer for OpenClaw that avoids direct HTTP auth handling.
 ---
 
 # Clawban (core)
@@ -15,18 +15,17 @@ Provide a reusable core for a project-management “co-worker” that:
 
 ## Canonical stage model
 
-Treat these labels/states as canonical:
+Treat these labels/states as canonical (and the **only** stages the agent should consider):
 
 - `stage:backlog`
-- `stage:queued`
-- `stage:needs-clarification`
-- `stage:ready-to-implement`
+- `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`
-- `stage:blocked`
-- Done/closed (platform-specific)
 
-Adapters map platform concepts (labels, lists, statuses, custom fields) to this set.
+Notes:
+- Done/closed is platform-specific and intentionally not part of the canonical stage set.
+
+Adapters map platform concepts (labels, lists, statuses, custom fields) into this canonical set.
 
 ## Architecture (ports & adapters)
 
@@ -55,14 +54,42 @@ See also: `src/adapters/README.md` for CLI links and assumptions.
 
 ## Entry points
 
-- `clawban tick`: one deterministic pass (poll → normalize → apply rules → emit actions)
-- `clawban webhook`: optional inbound webhook receiver *only where feasible without taking over auth*
+Library entry points:
+- `tick()` (poll → normalize → diff → events)
+- verb-level workflow helpers: `show`, `next`, `start`, `update`, `ask`, `complete`, `create`
+- automations: `runProgressAutoUpdates()`
+
+CLI entry point:
+- `src/cli.ts` (provides `clawban <verb>`; see README for setup flags)
 
 ## CLI ergonomics: "What next" tips
 
-All `clawban <verb>` commands print a `What next:` tip after execution to guide the canonical flow (setup → next → start → ask/update → complete → next).
+All `clawban <verb>` commands print a `What next:` tip after execution to guide the canonical flow:
 
-If `config/clawban.json` is missing or invalid, commands error and instruct you to complete setup.
+`setup` → `next` → `start` → (`ask` | `update`) → `complete` → `next`
+
+After `start`, the tip additionally reminds you to run the actual execution/implementation work in a **subagent**, then report back via `ask`/`update`.
+
+If `config/clawban.json` is missing or invalid, **all commands** error and instruct you to complete setup.
+
+## Setup (flags-only)
+
+Setup writes `config/clawban.json` and validates that the selected platform CLI is installed + authenticated.
+
+Required:
+- `clawban setup --adapter <github|plane|linear|planka> ...`
+- stage mapping flags: `--map-backlog`, `--map-blocked`, `--map-in-progress`, `--map-in-review`
+
+Adapter flags (summary):
+- GitHub: `--github-repo <owner/repo>`, optional `--github-project-number <number>`
+- Plane: `--plane-workspace-slug <slug>`, `--plane-project-id <uuid>`, optional `--plane-order-field <field>`
+- Linear: `--linear-team-id <id>` or `--linear-project-id <id>`, optional `--linear-view-id <id>`
+- Planka: `--planka-board-id <id>`, `--planka-backlog-list-id <id>`
+
+## Continuous status updates
+
+While a task is in `stage:in-progress`, Clawban can post an automatic progress update comment every 5 minutes.
+Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
 
 ## Recommended repo layout
 

@@ -4,16 +4,15 @@ A TypeScript-first core skill for a stage-based “agentic co-worker” that int
 
 ## What it is
 
-Clawban standardizes a canonical workflow state machine using your existing `stage:*` lifecycle:
+Clawban standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
 
 - `stage:backlog`
-- `stage:queued`
-- `stage:needs-clarification`
-- `stage:ready-to-implement`
+- `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`
-- `stage:blocked`
-- done/closed (platform-specific)
+
+Notes:
+- Done/closed is platform-specific and intentionally **not** part of the canonical stage set.
 
 It provides:
 - Canonical models + event types
@@ -40,7 +39,33 @@ See `src/adapters/README.md` for links and notes.
 
 Every `clawban <verb>` execution prints a `What next:` tip line to guide the next step in the workflow.
 
-If setup is not completed (missing/invalid `config/clawban.json`), commands will fail with a clear error and instruct you to run `clawban setup`.
+If setup is not completed (missing/invalid `config/clawban.json`), **all commands** will fail with a clear error and instruct you to run `clawban setup`.
+
+### Setup
+
+Setup is flags-only (non-interactive) and writes `config/clawban.json`.
+
+Common flags:
+- `--adapter <github|plane|linear|planka>`
+- `--force` (required to overwrite an existing config)
+
+Stage mapping (required; map *platform stage/list/status name* → canonical stage):
+- `--map-backlog <platform-name>`
+- `--map-blocked <platform-name>`
+- `--map-in-progress <platform-name>`
+- `--map-in-review <platform-name>`
+
+Adapter flags:
+- GitHub: `--github-repo <owner/repo>`, optional `--github-project-number <number>`
+- Plane: `--plane-workspace-slug <slug>`, `--plane-project-id <uuid>`, optional `--plane-order-field <field>`
+- Linear: scope `--linear-team-id <id>` **or** `--linear-project-id <id>`, optional ordering `--linear-view-id <id>`
+- Planka: `--planka-board-id <id>`, `--planka-backlog-list-id <id>`
+
+### Continuous status updates
+
+While an item is in `stage:in-progress`, Clawban can post an **automatic progress update comment every 5 minutes**. The helper is exported as:
+
+- `runProgressAutoUpdates()` (see `src/automation/progress_updates.ts`)
 
 ## Development
 
