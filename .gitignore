@@ -23,5 +23,9 @@ node_modules/
 .vitest/
 coverage/
 
+# Local runtime/config
+.tmp/
+config/clawban.json
+
 # OS
 .DS_Store
