@@ -17,9 +17,11 @@ Adapters are **CLI-auth** integrations. Clawban does not manage HTTP auth tokens
 
 ## Planka
 
-- API/Project: https://github.com/plankanban/planka
+- CLI: **planka-cli**
+- Link: https://github.com/voydz/planka-cli
+- Planka project: https://github.com/plankanban/planka
 
-> Note: There is no single canonical Planka CLI. The `PlankaAdapter` assumes you provide a `planka` CLI (or wrapper) that can output JSON.
+The adapter defaults to calling `planka-cli cards list --json`. If your installed version differs, pass custom `listArgs`.
 
 ## Plane
 
