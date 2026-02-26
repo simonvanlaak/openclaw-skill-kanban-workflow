@@ -5,7 +5,7 @@ This document captures the initial Q&A requirements for Kanban Workflow’s verb
 ## Design constraints
 
 - **Canonical state machine:** use existing `stage:*` lifecycle.
-- **CLI-auth only:** adapters must rely on platform CLIs for authentication/session. No direct HTTP auth handling in Kanban Workflow.
+- **CLI-first auth:** adapters must use platform CLIs/scripts for auth/session. Kanban Workflow does not run interactive OAuth flows or persist secrets, but adapter CLIs may require environment variables (API keys) and may make HTTPS calls internally.
 - **Cross-platform:** GitHub, Planka, Plane, Linear.
 
 ## Canonical stage names

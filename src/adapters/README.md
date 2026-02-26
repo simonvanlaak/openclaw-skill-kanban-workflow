@@ -1,6 +1,6 @@
 # Kanban Workflow adapters
 
-Adapters are **CLI-auth** integrations. Kanban Workflow does not manage HTTP auth tokens; each adapter relies on a locally configured CLI session.
+Adapters are **CLI-first** integrations. Kanban Workflow delegates authentication to adapter-specific CLIs/scripts (which may use a local CLI session *or* environment variables like API keys). Kanban Workflow itself does not implement OAuth flows or store tokens.
 
 ## GitHub
 

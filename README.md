@@ -1,6 +1,6 @@
 # Kanban Workflow
 
-A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-auth adapters** (no direct HTTP auth handling).
+A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-first adapters** (external CLIs or wrapper scripts; some use API keys via env vars).
 
 ## What it is
 
@@ -69,7 +69,7 @@ While an item is in `stage:in-progress`, Kanban Workflow can post an **automatic
 
 ## Security model
 
-Kanban Workflow **does not** handle platform HTTP auth tokens directly.
+Kanban Workflow **does not** run interactive OAuth flows or persist secrets. Authentication is handled by the adapter’s CLI/script (often via an existing CLI session or an API key environment variable).
 
 Instead, it shells out to a platform-specific CLI (e.g. `gh`, `plane`, `scripts/linear_json.sh`, `planka-cli`) and therefore acts with the **same privileges as that CLI session** on the host machine.
 

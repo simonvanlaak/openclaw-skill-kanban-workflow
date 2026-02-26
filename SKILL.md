@@ -1,6 +1,6 @@
 ---
 name: kanban-workflow
-description: Kanban Workflow is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-auth adapters only (no direct HTTP auth). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
+description: Kanban Workflow is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-first adapters (CLIs or small wrapper scripts). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
 
 # Skill packaging / runtime requirements
 requirements:
@@ -44,7 +44,7 @@ requirements:
 Provide a reusable core for a project-management “co-worker” that:
 
 - Uses the existing `stage:*` lifecycle as the canonical state machine.
-- Integrates with PM platforms via **CLI-managed auth** only (no direct HTTP auth handling).
+- Integrates with PM platforms via **adapter-managed auth** (external CLIs/scripts; may require env vars like API keys). Kanban Workflow does not run interactive OAuth flows or persist secrets.
 - Centralizes workflow/rules/runbooks so GitHub/Planka/Plane/Linear implementations share logic.
 
 ## Canonical stage model
