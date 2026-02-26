@@ -28,6 +28,7 @@ Notes:
 
 - Input: platform scope + work item identifier.
 - Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
+- Also include: titles of any linked/related tickets (e.g., blocks/blocked-by/duplicates) where supported.
 - Use case: follow linked/blocked tickets during implementation.
 
 ### 1) `next`
