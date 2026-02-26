@@ -52,20 +52,28 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 - Primary need: *only* `next` for discovery/selection.
 - Selection policy TBD (see open questions), but should be deterministic.
 
-### 2) Task interaction verbs (3 outcomes)
+### 2) `update`
 
-For a selected task, the agent has exactly three user-facing actions:
+- Post a progress update comment on a task.
+- **No enforced template**; post the provided text as-is.
+- No stage change.
 
-- `update` — post a progress update (comment only). **No enforced template**; post the provided text as-is.
-- `complete` — post a **Completed** comment and mark task complete (automatically move it to `stage:in-review`)
-- `ask` — post a clarification request comment and move the task to `stage:blocked`
+### 3) `complete`
 
-### 3) `start`
+- Post a **Completed** comment.
+- Move the task to `stage:in-review`.
+
+### 4) `ask`
+
+- Post a clarification request comment.
+- Move the task to `stage:blocked`.
+
+### 5) `start`
 
 - Required stage change verb: `start`.
 - Behavior: transition task into `stage:in-progress`.
 
-### 4) `create`
+### 6) `create`
 
 **Goal:** create a new task in `stage:backlog` and automatically assign it to the agent itself.
 
