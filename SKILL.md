@@ -90,7 +90,7 @@ See also: `src/adapters/README.md` for CLI links and assumptions.
 
 Library entry points:
 - `tick()` (poll → normalize → diff → events)
-- verb-level workflow helpers: `show`, `next`, `start`, `update`, `ask`, `complete`, `create`
+- verb-level workflow helpers: `show`, `next`, `start`, `update`, `ask`, `complete`, `create`, `autopilot-tick`
 - automations: `runProgressAutoUpdates()`
 
 CLI entry point:

@@ -18,6 +18,14 @@ const StageMapSchema = z
 
 export const ClawbanConfigV1Schema = z.object({
   version: z.literal(1),
+  autopilot: z
+    .object({
+      /** Cron expression for triggering a single autopilot tick. */
+      cronExpr: z.string().min(1).default('*/5 * * * *'),
+      /** Optional timezone for cron evaluation (e.g. Europe/Berlin). */
+      tz: z.string().min(1).optional(),
+    })
+    .optional(),
   adapter: z.discriminatedUnion('kind', [
     z.object({
       kind: z.literal('github'),

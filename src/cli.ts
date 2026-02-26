@@ -169,11 +169,14 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         throw new Error(`Unknown adapter kind: ${adapterKind}`);
       }
 
+      const autopilotCronExpr = String(flags['autopilot-cron-expr'] ?? '*/5 * * * *').trim();
+      const autopilotTz = flags['autopilot-cron-tz'] ? String(flags['autopilot-cron-tz']).trim() : undefined;
+
       await runSetup({
         fs,
         configPath,
         force,
-        config: { version: 1, adapter: adapterCfg },
+        config: { version: 1, autopilot: { cronExpr: autopilotCronExpr, tz: autopilotTz || undefined }, adapter: adapterCfg },
         validate: async () => {
           // Validate ALL read-only verb prerequisites.
           const adapter = await adapterFromConfig(adapterCfg);
@@ -205,7 +208,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       });
 
       io.stdout.write(`Wrote ${configPath}\n`);
-      io.stdout.write('Autopilot suggestion: schedule a cron tick (OpenClaw) to run `kanban-workflow autopilot-tick` every 1-5 minutes.\n');
+      io.stdout.write(
+        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`kanban-workflow autopilot-tick\`.\n`,
+      );
       writeWhatNext(io, cmd);
       return 0;
     }

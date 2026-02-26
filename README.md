@@ -1,6 +1,6 @@
 # Kanban Workflow
 
-A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-first adapters** (external CLIs or wrapper scripts; some use API keys via env vars).
+A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-first adapters** (external CLIs or wrapper scripts; some use API keys via env vars). It also includes an `autopilot-tick` command intended to be run on a schedule (e.g. OpenClaw cron).
 
 ## What it is
 
