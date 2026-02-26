@@ -26,8 +26,15 @@ The adapter defaults to calling `planka-cli cards list --json`. If your installe
 ## Plane
 
 - Project: https://github.com/makeplane/plane
+- Canonical CLI: **plane-cli** (a2c-based)
+  - https://github.com/simonvanlaak/plane-cli
 
-> Note: Plane’s CLI options vary by deployment. The `PlaneAdapter` assumes you provide a `plane` CLI (or wrapper) that can output JSON.
+The adapter defaults to calling a `plane` wrapper on your `PATH` (recommended), as provided by `plane-cli`.
+
+If you prefer calling Api2Cli directly, configure:
+
+- `bin: "a2c"`
+- `baseArgs: ["--config", "<path-to-plane-cli>/a2c", "--workspace", "plane"]`
 
 ## Contributing a new adapter
 
