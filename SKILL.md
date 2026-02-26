@@ -1,6 +1,6 @@
 ---
 name: clawban
-description: Core "Clawban" skill: a stage-based (stage:queued/needs-clarification/ready-to-implement/in-progress/in-review/blocked) project-management coworker architecture with CLI-auth adapters (gh, planka, openproject, etc.), runbooks/SOP assets, polling + snapshot-diff event synthesis, and cron/webhook-friendly entrypoints. Use when designing, implementing, or extending a pluggable PM integration layer for OpenClaw that avoids direct HTTP auth handling.
+description: Core "Clawban" skill (TypeScript): a stage-based (stage:queued/needs-clarification/ready-to-implement/in-progress/in-review/blocked) project-management coworker architecture with CLI-auth adapters (gh, planka, openproject, etc.), runbooks/SOP assets, polling + snapshot-diff event synthesis, and cron/webhook-friendly entrypoints. Use when designing, implementing, or extending a pluggable PM integration layer for OpenClaw that avoids direct HTTP auth handling.
 ---
 
 # Clawban (core)
@@ -56,8 +56,13 @@ Adapters are “smart wrappers” that:
 - `references/`: schemas and adapter notes (loaded on demand).
 - `assets/`: runbooks/SOP templates.
 
+## Repo status
+
+- The **current core implementation is in TypeScript** under `src/`.
+- The previous Python prototype has been **retired** under `legacy/python/` for reference.
+
 ## Next implementation steps
 
-1) Define the internal adapter interface (Python protocol / ABC) for the port.
-2) Implement `github_adapter` using `gh` + local snapshot diffing.
+1) Define/extend the internal adapter interface (TypeScript port) for each platform.
+2) Implement a `github_adapter` that shells out to `gh` + local snapshot diffing.
 3) Add adapter stubs for Planka and OpenProject (CLI-based).

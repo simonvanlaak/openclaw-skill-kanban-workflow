@@ -18,5 +18,10 @@ venv/
 .coverage
 htmlcov/
 
+# Node
+node_modules/
+.vitest/
+coverage/
+
 # OS
 .DS_Store
