@@ -59,7 +59,6 @@ Adapters are “smart wrappers” that:
 ## Repo status
 
 - The **current core implementation is in TypeScript** under `src/`.
-- The previous Python prototype has been **retired** under `legacy/python/` for reference.
 
 ## Next implementation steps
 
