@@ -10,6 +10,9 @@ export * from './automation/progress_updates.js';
 
 export * from './config.js';
 export * from './setup.js';
+
+export * from './core/ports.js';
+
 export * from './verbs/next_selection.js';
 export * from './verbs/types.js';
 export * from './verbs/verbs.js';
