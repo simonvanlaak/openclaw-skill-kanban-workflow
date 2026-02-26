@@ -11,7 +11,7 @@ Provide a reusable core for a project-management “co-worker” that:
 
 - Uses the existing `stage:*` lifecycle as the canonical state machine.
 - Integrates with PM platforms via **CLI-managed auth** only (no direct HTTP auth handling).
-- Centralizes workflow/rules/runbooks so GitHub/Planka/OpenProject implementations share logic.
+- Centralizes workflow/rules/runbooks so GitHub/Planka/Plane/Linear implementations share logic.
 
 ## Canonical stage model
 
@@ -41,9 +41,17 @@ Adapters map platform concepts (labels, lists, statuses, custom fields) to this 
 
 Adapters are “smart wrappers” that:
 
-- Call existing CLIs (e.g. `gh`), relying on their auth/session.
+- Call existing CLIs (e.g. `gh`, `planka-cli`, `plane-cli`, `linear-cli`), relying on their auth/session.
 - Compose multiple CLI calls to implement higher-level operations.
 - Synthesize events by polling + snapshot diffing when webhooks or event types are missing.
+
+Canonical adapter entrypoints live in `src/adapters/`:
+- `github.ts` (gh CLI)
+- `planka.ts` (planka-cli)
+- `plane.ts` (plane-cli; Api2Cli workspace)
+- `linear.ts` (linear-cli; Api2Cli workspace)
+
+See also: `src/adapters/README.md` for CLI links and assumptions.
 
 ## Entry points
 
@@ -62,6 +70,7 @@ Adapters are “smart wrappers” that:
 
 ## Next implementation steps
 
-1) Define/extend the internal adapter interface (TypeScript port) for each platform.
-2) Implement a `github_adapter` that shells out to `gh` + local snapshot diffing.
-3) Add adapter stubs for Planka and OpenProject (CLI-based).
+1) Extend the adapter port to include idempotent write operations (comment/transition/label) in addition to `fetchSnapshot()`.
+2) Finish and validate the Plane + Linear adapters (consume `plane-cli` / `linear-cli` output schemas).
+3) Decide on the authoritative mapping rule for stage → platform state (names vs explicit mapping table) and codify it.
+4) Add a small CLI surface for Clawban itself (e.g. `clawban tick --adapter plane --workspace ... --project ...`).

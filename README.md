@@ -19,7 +19,15 @@ It provides:
 - Canonical models + event types
 - Snapshot diffing to synthesize events (polling-friendly)
 - A deterministic `tick()` runner
-- Adapters that call existing CLIs (e.g. `gh`) using the user’s authenticated session
+- Adapters that call existing CLIs using the user’s authenticated session
+
+Currently supported adapters:
+- **GitHub** via `gh` (in-repo adapter)
+- **Planka** via `planka-cli` (voydz/planka-cli)
+- **Plane** via `plane-cli` (simonvanlaak/plane-cli; a2c workspace)
+- **Linear** via `linear-cli` (simonvanlaak/linear-cli; a2c workspace)
+
+See `src/adapters/README.md` for links and notes.
 
 ## Repo layout
 
@@ -48,15 +56,18 @@ Build (optional):
 npm run build
 ```
 
-## GitHub adapter
+## Adapters
 
-The GitHub adapter uses the GitHub CLI (`gh`) only (including `gh api`). Ensure:
+Adapters live in `src/adapters/`.
 
-```bash
-gh auth status
-```
+- GitHub: uses **GitHub CLI** (`gh`, incl. `gh api`)
+- Planka: uses **planka-cli** (https://github.com/voydz/planka-cli)
+- Plane: uses **plane-cli** (https://github.com/simonvanlaak/plane-cli)
+- Linear: uses **linear-cli** (https://github.com/simonvanlaak/linear-cli)
 
-Then use the adapter from your own scripts/app (API is still evolving).
+Notes:
+- Clawban itself does **not** handle HTTP auth tokens. Authenticate via the CLI you use.
+- For Plane/Linear, the CLI is an **Api2Cli (a2c)** workspace + wrapper.
 
 ## Status
 

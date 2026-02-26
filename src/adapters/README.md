@@ -10,10 +10,15 @@ Adapters are **CLI-auth** integrations. Clawban does not manage HTTP auth tokens
 
 ## Linear
 
-- CLI: **Linear CLI**
-- Link: https://github.com/linear/linear
+- Canonical CLI: **linear-cli** (a2c-based)
+  - https://github.com/simonvanlaak/linear-cli
 
-> Note: Linear’s official tooling and community CLIs vary. If you use a different CLI/wrapper, update `LinearAdapter` to match its JSON output.
+The adapter defaults to calling a `linear` wrapper on your `PATH` (recommended), as provided by `linear-cli`.
+
+If you prefer calling Api2Cli directly, configure:
+
+- `bin: "a2c"`
+- `baseArgs: ["--config", "<path-to-linear-cli>/a2c", "--workspace", "linear"]`
 
 ## Planka
 
