@@ -126,8 +126,11 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - Scope input: repo/project/workspace/team.
    - **Ordering:** if the platform supports a human-defined priority/custom order, `next` must respect it.
      - **GitHub:** use **GitHub Project board ordering** as the explicit human-defined order.
+       - Configured during setup via **project number**.
      - **Plane:** use the **manual order in the UI**.
+       - If the ordering field cannot be determined from Plane API responses, it must be configured during setup.
      - **Linear:** use the **manual order in a view**.
+       - Configured during setup via **view id**.
      - **Planka:** use **card position in the list**.
    - If no explicit order is available, fall back to **most recently updated first**.
 
