@@ -22,7 +22,7 @@ This document captures the initial Q&A requirements for Clawban’s verb-level w
 For a selected task, the agent has exactly three user-facing actions:
 
 - `update` — post a progress update (comment only)
-- `complete` — mark task complete (and automatically move it to `stage:in-review`)
+- `complete` — post a **Completed** comment and mark task complete (automatically move it to `stage:in-review`)
 - `ask` — request clarification (and move to `stage:needs-clarification`)
 
 ### 3) `start`
