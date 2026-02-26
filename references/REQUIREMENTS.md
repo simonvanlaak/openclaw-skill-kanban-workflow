@@ -71,6 +71,18 @@ Adapter-specific scope/order flags:
 - Config storage: store config in-repo (versionable) under `config/clawban.json`.
 - Only **one** config file/profile is supported (no multiple profiles).
 
+## UX requirement: next-step tips
+
+Every verb execution must output a **"What next"** tip.
+
+- If setup is not completed (no valid `config/clawban.json`), **all commands** must error and instruct the user to complete setup.
+- After successful `setup`: suggest `next`.
+- After `next`: suggest `start`.
+- After `start`: suggest `ask` or `update`.
+- After `ask`: suggest `next`.
+- After `update`: suggest `complete`.
+- After `complete`: suggest `next`.
+
 ## Required verbs (MVP)
 
 ### 0) `show`
