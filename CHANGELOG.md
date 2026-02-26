@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.3
+- Autopilot: `autopilot-tick` + setup option to install an OpenClaw cron job (`--autopilot-install-cron`)
+
 ## 0.1.2
 - Packaging: remove local venv/pytest cache artifacts from published bundle
 
