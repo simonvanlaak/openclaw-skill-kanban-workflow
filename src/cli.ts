@@ -55,9 +55,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         });
       }
 
-      if (flags['linear-team-id'] || flags['linear-project-id']) {
+      if (flags['linear-view-id'] || flags['linear-team-id'] || flags['linear-project-id']) {
         adapters.push({
           kind: 'linear',
+          viewId: flags['linear-view-id'] ? String(flags['linear-view-id']) : undefined,
           teamId: flags['linear-team-id'] ? String(flags['linear-team-id']) : undefined,
           projectId: flags['linear-project-id'] ? String(flags['linear-project-id']) : undefined,
         });
@@ -68,6 +69,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           kind: 'plane',
           workspaceSlug: String(flags['plane-workspace']),
           projectId: String(flags['plane-project-id']),
+          orderField: flags['plane-order-field'] ? String(flags['plane-order-field']) : undefined,
         });
       }
 
@@ -168,9 +170,9 @@ async function adapterFromConfig(cfg: any): Promise<any> {
     case 'github':
       return new GitHubAdapter({ repo: cfg.repo, snapshotPath: 'data/github_snapshot.json', project: cfg.project });
     case 'linear':
-      return new LinearAdapter({ teamId: cfg.teamId, projectId: cfg.projectId });
+      return new LinearAdapter({ viewId: cfg.viewId, teamId: cfg.teamId, projectId: cfg.projectId });
     case 'plane':
-      return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId });
+      return new PlaneAdapter({ workspaceSlug: cfg.workspaceSlug, projectId: cfg.projectId, orderField: cfg.orderField });
     case 'planka':
       return new PlankaAdapter();
     default:

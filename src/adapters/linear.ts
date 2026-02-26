@@ -26,6 +26,8 @@ type LinearCliIssuesResponse = {
 };
 
 export type LinearAdapterOptions = {
+  /** Optional view id to fetch issues in explicit (manual) view order. */
+  viewId?: string;
   /**
    * Binary to execute.
    *
@@ -63,6 +65,7 @@ export type LinearAdapterOptions = {
 export class LinearAdapter implements Adapter {
   private readonly cli: CliRunner;
   private readonly baseArgs: readonly string[];
+  private readonly viewId?: string;
   private readonly teamId?: string;
   private readonly projectId?: string;
   private readonly stateMap: Readonly<Record<string, StageKey>>;
@@ -70,6 +73,7 @@ export class LinearAdapter implements Adapter {
   constructor(opts: LinearAdapterOptions) {
     this.cli = new CliRunner(opts.bin ?? 'linear');
     this.baseArgs = opts.baseArgs ?? [];
+    this.viewId = opts.viewId;
     this.teamId = opts.teamId;
     this.projectId = opts.projectId;
     this.stateMap = opts.stateMap ?? {};
@@ -162,8 +166,13 @@ export class LinearAdapter implements Adapter {
   }
 
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
+    if (this.viewId) {
+      // Explicit ordering via view id.
+      return this.fetchSnapshotFromView(this.viewId);
+    }
+
     if ((this.teamId && this.projectId) || (!this.teamId && !this.projectId)) {
-      throw new Error('LinearAdapter requires exactly one of: teamId, projectId');
+      throw new Error('LinearAdapter requires exactly one of: teamId, projectId (or provide viewId)');
     }
 
     const cmd = this.teamId
@@ -171,6 +180,19 @@ export class LinearAdapter implements Adapter {
       : (['issues-project', this.projectId!] as const);
 
     const out = await this.cli.run([...this.baseArgs, ...cmd]);
+    return this.parseIssuesJson(out);
+  }
+
+  private async fetchSnapshotFromView(viewId: string): Promise<ReadonlyMap<string, WorkItem>> {
+    // Requirement: explicit ordering via view id. We assume linear-cli exposes a read-only
+    // command that returns issues for a view in that view's manual order.
+    //
+    // Expected (by convention): `linear issues-view <view_id>`.
+    const out = await this.cli.run([...this.baseArgs, 'issues-view', viewId]);
+    return this.parseIssuesJson(out);
+  }
+
+  private parseIssuesJson(out: string): ReadonlyMap<string, WorkItem> {
     const parsed: LinearCliIssuesResponse = out.trim().length > 0 ? JSON.parse(out) : {};
     const nodes = parsed.data?.issues?.nodes ?? [];
 

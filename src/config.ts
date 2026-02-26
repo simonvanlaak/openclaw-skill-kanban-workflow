@@ -17,6 +17,8 @@ export const ClawbanConfigV1Schema = z.object({
         }),
         z.object({
           kind: z.literal('linear'),
+          /** Configure explicit ordering via Linear view id (manual view order). */
+          viewId: z.string().optional(),
           teamId: z.string().optional(),
           projectId: z.string().optional(),
         }),
@@ -24,6 +26,8 @@ export const ClawbanConfigV1Schema = z.object({
           kind: z.literal('plane'),
           workspaceSlug: z.string().min(1),
           projectId: z.string().min(1),
+          /** Optional explicit ordering field for Plane when it can't be discovered. */
+          orderField: z.string().min(1).optional(),
         }),
         z.object({
           kind: z.literal('planka'),

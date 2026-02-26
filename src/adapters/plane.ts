@@ -5,6 +5,16 @@ import { z } from 'zod';
 
 import { Stage } from '../stage.js';
 
+function discoverPlaneOrderField(issues: any[]): string | undefined {
+  // Best-effort heuristics. Plane often uses numeric ordering fields.
+  const candidates = ['sort_order', 'sortOrder', 'rank', 'position', 'order', 'sequence_id', 'sequenceId'];
+  for (const field of candidates) {
+    const has = issues.some((x: any) => x && typeof x === 'object' && field in x);
+    if (has) return field;
+  }
+  return undefined;
+}
+
 import { CliRunner } from './cli.js';
 
 /**
@@ -24,6 +34,7 @@ export class PlaneAdapter implements Adapter {
   private readonly workspaceSlug: string;
   private readonly projectId: string;
   private readonly stateMap: Readonly<Record<string, string>>;
+  private readonly orderField?: string;
 
   constructor(opts: {
     workspaceSlug: string;
@@ -32,12 +43,15 @@ export class PlaneAdapter implements Adapter {
     baseArgs?: readonly string[];
     /** Optional mapping: Plane state name -> canonical stage key (or any Stage.fromAny input). */
     stateMap?: Readonly<Record<string, string>>;
+    /** Explicit ordering field name when UI order can't be discovered. */
+    orderField?: string;
   }) {
     this.cli = new CliRunner(opts.bin ?? 'plane');
     this.baseArgs = opts.baseArgs ?? [];
     this.workspaceSlug = opts.workspaceSlug;
     this.projectId = opts.projectId;
     this.stateMap = opts.stateMap ?? {};
+    this.orderField = opts.orderField;
   }
 
   name(): string {
@@ -70,12 +84,58 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listBacklogIdsInOrder(): Promise<string[]> {
+    // Try to preserve explicit UI ordering if we can discover it from API fields.
+    // Otherwise require an explicit order field from setup, and finally fall back to updatedAt desc.
+    const out = await this.cli.run([
+      ...this.baseArgs,
+      'workitems',
+      this.workspaceSlug,
+      this.projectId,
+    ]);
+
+    const issues = JSON.parse(out || '[]');
+
+    const orderField = this.orderField ?? discoverPlaneOrderField(issues);
+
+    if (this.orderField === undefined && orderField === undefined) {
+      // Can't discover; ask setup to provide.
+      throw new Error(
+        'Plane ordering not discoverable. Re-run setup with --plane-order-field <fieldName> to match UI order, or accept updatedAt fallback by specifying a field.',
+      );
+    }
+
+    // We re-use fetchSnapshot for stage mapping, but we need raw ordering values.
     const snap = await this.fetchSnapshot();
     const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
 
-    // Assume the CLI output order is the UI order; fallback to updatedAt desc when available.
-    const ordered = [...backlog].sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
-    return ordered.map((i) => i.id);
+    if (orderField) {
+      const byId = new Map(issues.map((x: any) => [String(x.id), x] as const));
+      const withOrder = backlog
+        .map((i) => ({
+          id: i.id,
+          order: Number(byId.get(i.id)?.[orderField]),
+          updatedAt: i.updatedAt,
+        }))
+        .filter((x) => Number.isFinite(x.order));
+
+      if (withOrder.length > 0) {
+        withOrder.sort((a, b) => a.order - b.order);
+        const orderedIds = withOrder.map((x) => x.id);
+        const orderedSet = new Set(orderedIds);
+
+        const rest = backlog
+          .filter((i) => !orderedSet.has(i.id))
+          .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+          .map((i) => i.id);
+
+        return [...orderedIds, ...rest];
+      }
+    }
+
+    // updatedAt desc fallback
+    return [...backlog]
+      .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
+      .map((i) => i.id);
   }
 
   async getWorkItem(id: string): Promise<{
