@@ -10,18 +10,14 @@ This document captures the initial Q&A requirements for Clawban’s verb-level w
 
 ## Canonical stage names
 
-Clawban’s canonical stages are:
+Clawban’s canonical stages are (and these are the **only** stages the agent should consider):
 
 - `stage:backlog`
-- `stage:queued`
-- `stage:ready-to-implement`
+- `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`
-- `stage:needs-clarification`
-- `stage:blocked`
 
 Notes:
-- `next` treats `stage:queued` and `stage:ready-to-implement` as a combined eligible pool.
 - “Done/closed” is platform-specific and not currently part of the canonical stage set.
 
 ## Required verbs (MVP)
@@ -48,10 +44,10 @@ For a selected task, the agent has exactly three user-facing actions:
 
 ### 4) `create`
 
-**Goal:** create a new task in `stage:queued` and automatically assign it to the agent itself.
+**Goal:** create a new task in `stage:backlog` and automatically assign it to the agent itself.
 
 - Must create work item in the target platform.
-- Must apply/encode `stage:queued`.
+- Must apply/encode `stage:backlog`.
 - Must assign to the agent identity.
 
 ## Not required (explicitly)
@@ -85,14 +81,14 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
 
 1) **Definition of `next`:**
    - **Guard:** first check whether the agent already has a task in `stage:in-progress`. If yes, `next` must return an error (do not assign a second task).
-   - **Eligible pool:** treat `stage:queued` and `stage:ready-to-implement` as a single combined pool.
-   - **Selection order:** if there is nothing in progress, pull from that combined pool (ordering rule still TBD).
-   - **Empty behavior:** if the combined pool is empty, return an **info** response indicating there is no work to do.
+   - **Eligible pool:** if there is nothing in progress, pull from `stage:backlog`.
+   - **Empty behavior:** if `stage:backlog` is empty, return an **info** response indicating there is no work to do.
    - Scope input: repo/project/workspace/team.
+   - Ordering rule still TBD (see open questions).
 
 2) **`create` payload + assignment details:**
    - `create` must accept: **title + description/body in Markdown**.
-   - Do we require applying `stage:queued` via label/state/list *in addition* to the platform’s default state?
+   - Do we require applying `stage:backlog` via label/state/list *in addition* to the platform’s default state?
    - For each platform, what identifier should be used for “assign to self”? (prefer CLI `whoami` JSON → stable user id)
 
 3) **Auto-reopen policy details:**
