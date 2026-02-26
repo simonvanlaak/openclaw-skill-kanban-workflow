@@ -67,13 +67,15 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 
 ### 4) `ask`
 
-- Post a clarification request comment.
+- Requires clarification request **text**.
+- Post a clarification request comment including that text.
 - Move the task to `stage:blocked`.
 
 ### 5) `start`
 
 - Required stage change verb: `start`.
 - Behavior: transition task into `stage:in-progress`.
+- No comment is posted on `start`.
 
 ### 6) `create`
 
@@ -115,7 +117,9 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
 ## Open questions
 
 1) **Definition of `next`:**
-   - **Guard:** first check whether the agent already has a task in `stage:in-progress`. If yes, `next` must return an error (do not assign a second task).
+   - **Guard:** first check whether the agent already has task(s) in `stage:in-progress`.
+     - If **exactly 1** task is in progress: `next` must return an error (do not assign a second task).
+     - If **more than 1** task is in progress: `next` must return an error (inconsistent state; requires human intervention).
    - **Ignore in-review:** `next` ignores tickets in `stage:in-review`.
    - **Eligible pool:** if there is nothing in progress, pull from `stage:backlog`.
    - **Empty behavior:** if `stage:backlog` is empty, return an **info** response indicating there is no work to do.
