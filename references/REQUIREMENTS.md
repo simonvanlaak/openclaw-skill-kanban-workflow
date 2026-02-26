@@ -55,19 +55,36 @@ Reopening should happen automatically when a human comments on a task that is:
 
 (Exact target stage on reopen is TBD; likely `stage:in-progress` or `stage:queued` depending on context.)
 
+## CLI identity discovery (“self”) requirement
+
+For `create` (auto-assign to self) and any future ownership logic, Clawban must be able to discover the current authenticated user from the platform CLI.
+
+- **GitHub:** use `gh api user` → `login`
+- **Linear:** use `linear-cli whoami` (viewer)
+- **Plane:** use `plane-cli` request `/api/v1/users/me/`
+- **Planka:** `planka-cli status` shows the current user, but output is human-formatted.
+  - **Recommended approach:** ship a small **wrapper script** (CLI-auth compliant) that returns `whoami` as **JSON** for Planka, rather than parsing formatted output.
+
 ## Open questions
 
 1) **Definition of “next”:**
    - Which stage(s) are eligible? (`stage:ready-to-implement` only vs also `stage:queued`?)
-   - Is it FIFO by created time, updated time, or explicit priority?
+   - Ordering: FIFO by created time, updated time, priority field, or explicit queue ordering?
    - What is the scope input? (repo/project/workspace/team)
 
-2) **Agent identity for auto-assign on `create`:**
-   - For each platform (GitHub/Plane/Linear/Planka), what is the identifier for “assign to the agent itself”? (username/userId/service account)
+2) **`create` payload + assignment details:**
+   - Minimal fields: title only, or title + description/body?
+   - Do we require applying `stage:queued` via label/state/list *in addition* to the platform’s default state?
+   - For each platform, what identifier should be used for “assign to self”? (prefer CLI `whoami` JSON → stable user id)
 
 3) **Auto-reopen policy details:**
-   - On human comment, reopen to which stage?
+   - On human comment, reopen to which stage? (likely `stage:in-progress` vs `stage:ready-to-implement`)
+   - Should auto-reopen also un-block (i.e., remove `stage:blocked`) or just move stage?
    - Should the agent post an automatic acknowledgement comment?
+
+4) **Message formats:**
+   - Should `update/ask/complete` comments be plain Markdown, HTML, or platform-native?
+   - Should Clawban standardize a small template (prefixes like "Update:" / "Clarification needed:" / "Completed:")?
 
 ## Implementation notes (for later)
 
