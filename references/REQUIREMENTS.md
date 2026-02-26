@@ -22,6 +22,14 @@ Notes:
 
 ## Required verbs (MVP)
 
+### 0) `show`
+
+**Goal:** show the content of a specific ticket/work item on demand (even if it is not the next item).
+
+- Input: platform scope + work item identifier.
+- Output: title, current stage, URL, body/description, and relevant metadata (assignees/labels/state).
+- Use case: follow linked/blocked tickets during implementation.
+
 ### 1) `next`
 
 **Goal:** return the next work item the agent should work on.
@@ -33,7 +41,7 @@ Notes:
 
 For a selected task, the agent has exactly three user-facing actions:
 
-- `update` — post a progress update (comment only)
+- `update` — post a progress update (comment only). **No enforced template**; post the provided text as-is.
 - `complete` — post a **Completed** comment and mark task complete (automatically move it to `stage:in-review`)
 - `ask` — post a clarification request comment and move the task to `stage:blocked`
 
