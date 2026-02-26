@@ -27,7 +27,7 @@ Notes:
 **Goal:** show the content of a specific ticket/work item on demand (even if it is not the next item).
 
 - Input: platform scope + work item identifier.
-- Output: title, current stage, URL, body/description, and relevant metadata (assignees/labels/state).
+- Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), and the **last 10 comments** (most recent first).
 - Use case: follow linked/blocked tickets during implementation.
 
 ### 1) `next`
