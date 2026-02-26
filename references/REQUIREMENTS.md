@@ -65,7 +65,8 @@ Reopening should happen automatically when a human comments on a task that is:
 - `stage:blocked`, or
 - `stage:in-review`
 
-(Exact target stage on reopen is TBD; likely `stage:in-progress` or `stage:queued` depending on context.)
+Reopen target stage:
+- On human comment, automatically move the task to `stage:backlog`.
 
 ## CLI identity discovery (“self”) requirement
 
