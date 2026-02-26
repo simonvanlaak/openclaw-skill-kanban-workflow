@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.1.4
+- Plane: optional multi-project scope (`--plane-scope all-projects`) and assigned-only listing for autopilot/selection
+
 ## 0.1.3
 - Autopilot: `autopilot-tick` + setup option to install an OpenClaw cron job (`--autopilot-install-cron`)
 
