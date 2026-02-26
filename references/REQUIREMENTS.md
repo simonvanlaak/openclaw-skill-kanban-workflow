@@ -85,7 +85,9 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - **Eligible pool:** if there is nothing in progress, pull from `stage:backlog`.
    - **Empty behavior:** if `stage:backlog` is empty, return an **info** response indicating there is no work to do.
    - Scope input: repo/project/workspace/team.
-   - **Ordering:** if the platform supports a human-defined priority/custom order, `next` must respect it. If no explicit order is available, fall back to **most recently updated first**.
+   - **Ordering:** if the platform supports a human-defined priority/custom order, `next` must respect it.
+     - **GitHub:** use **GitHub Project board ordering** as the explicit human-defined order.
+   - If no explicit order is available, fall back to **most recently updated first**.
 
 2) **`create` payload + assignment details:**
    - `create` must accept: **title + description/body in Markdown**.
