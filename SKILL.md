@@ -1,6 +1,35 @@
 ---
 name: kanban-workflow
 description: Kanban Workflow is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-auth adapters only (no direct HTTP auth). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
+
+# Skill packaging / runtime requirements
+requirements:
+  # Core runtime
+  binaries:
+    - node
+    - npm
+  node:
+    install: npm ci
+
+  # Adapter-specific CLIs (only required if you select that adapter at setup time)
+  adapters:
+    github:
+      binaries: [gh]
+    planka:
+      binaries: [planka-cli]
+    plane:
+      # plane-cli is an Api2Cli (a2c) workspace wrapper by default.
+      binaries: [plane, a2c]
+    linear:
+      # linear-cli is an Api2Cli (a2c) workspace wrapper by default.
+      binaries: [linear, a2c]
+
+  # Environment variables
+  env:
+    # No env vars are required by Kanban Workflow itself.
+    # Auth is inherited from the selected platform CLI.
+    required: []
+    optional: []
 ---
 
 # Kanban Workflow (core)

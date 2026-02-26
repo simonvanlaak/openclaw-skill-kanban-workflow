@@ -67,14 +67,31 @@ While an item is in `stage:in-progress`, Kanban Workflow can post an **automatic
 
 - `runProgressAutoUpdates()` (see `src/automation/progress_updates.ts`)
 
-## Development
+## Security model
+
+Kanban Workflow **does not** handle platform HTTP auth tokens directly.
+
+Instead, it shells out to a platform-specific CLI (e.g. `gh`, `plane`, `linear`, `planka-cli`) and therefore acts with the **same privileges as that CLI session** on the host machine.
+
+Implications:
+- Anything the authenticated CLI can read/write, this skill can read/write.
+- Keep your CLI sessions scoped appropriately (least privilege), and treat `config/kanban-workflow.json` as sensitive metadata (it contains IDs, not secrets).
+
+See `SECURITY.md` for more detail.
+
+## Development / install
 
 Prereqs:
-- Node.js
+- Node.js + npm
+- Adapter CLI(s) for the platform you plan to use:
+  - GitHub: `gh`
+  - Planka: `planka-cli`
+  - Plane: `plane` (plane-cli wrapper) and/or `a2c`
+  - Linear: `linear` (linear-cli wrapper) and/or `a2c`
 
-Install:
+Install dependencies:
 ```bash
-npm install
+npm ci
 ```
 
 Run tests:
@@ -82,7 +99,7 @@ Run tests:
 npm test
 ```
 
-Build (optional):
+Build:
 ```bash
 npm run build
 ```
