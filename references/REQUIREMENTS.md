@@ -30,6 +30,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 - Setup validations are **read-only** (no comments/transitions/creates during setup).
 - Setup must configure the explicit human ordering source (e.g., GitHub Project selection) per adapter.
 - Config storage (chosen): store config in-repo (versionable) under `config/clawban.json`.
+- Only **one** config file/profile is supported (no multiple profiles).
 
 ## Required verbs (MVP)
 
