@@ -26,7 +26,8 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 
 - Setup must be **flags-only / non-interactive** (scriptable).
 - Setup currently supports configuring **exactly one** active adapter (GitHub *or* Plane *or* Linear *or* Planka).
-- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check) and **fail hard** if the selected adapter check fails.
+- Setup must collect a **stage mapping** for the selected adapter: map platform-specific state/list names to the 4 canonical stages.
+  - Mapping is required for **all 4** canonical stages (no partial mapping).- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check) and **fail hard** if the selected adapter check fails.
 - Setup validations are **read-only** (no comments/transitions/creates during setup).
 - Setup must configure the explicit human ordering source (e.g., GitHub Project selection) for the selected adapter.
 - Config storage: store config in-repo (versionable) under `config/clawban.json`.
@@ -40,7 +41,7 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 **Goal:** show the content of a specific ticket/work item on demand (even if it is not the next item).
 
 - Input: platform scope + work item identifier.
-- Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), **attachments (links/metadata) where supported**, and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
+- Output: title, current stage, URL, **full body/description**, relevant metadata (assignees/labels/state), **attachments (filename + URL) where supported**, and the **last 10 comments** (most recent first), including **private/internal** comments where supported.
 - Also include: titles of any linked/related tickets (e.g., blocks/blocked-by/duplicates) where supported.
 - Use case: follow linked/blocked tickets during implementation.
 
@@ -130,11 +131,11 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - **Ordering:** if the platform supports a human-defined priority/custom order, `next` must respect it.
      - **GitHub:** use **GitHub Project board ordering** as the explicit human-defined order.
        - Configured during setup via **project number**.
-     - **Plane:** use the **manual order in the UI**.
-       - If the ordering field cannot be determined from Plane API responses, it must be configured during setup.
-     - **Linear:** use the **manual order in a view**.
-       - Configured during setup via **view id**.
-     - **Planka:** use **card position in the list**.
+     - **Plane:** prefer the **manual order in the UI** if it is available via API/CLI output.
+       - If Plane manual order cannot be determined, fall back to **most recently updated first**.
+     - **Linear:** prefer the **manual order in a view** (configured during setup via **view id**) if it is accessible via CLI output.
+       - If Linear manual view order cannot be determined, fall back to **most recently updated first**.
+     - **Planka:** use **card position in the list** (after mapping lists → canonical stages).
    - If no explicit order is available, fall back to **most recently updated first**.
 
 2) **`create` payload + assignment details:**
