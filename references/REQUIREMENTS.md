@@ -8,6 +8,22 @@ This document captures the initial Q&A requirements for Clawban’s verb-level w
 - **CLI-auth only:** adapters must rely on platform CLIs for authentication/session. No direct HTTP auth handling in Clawban.
 - **Cross-platform:** GitHub, Planka, Plane, Linear.
 
+## Canonical stage names
+
+Clawban’s canonical stages are:
+
+- `stage:backlog`
+- `stage:queued`
+- `stage:ready-to-implement`
+- `stage:in-progress`
+- `stage:in-review`
+- `stage:needs-clarification`
+- `stage:blocked`
+
+Notes:
+- `next` treats `stage:queued` and `stage:ready-to-implement` as a combined eligible pool.
+- “Done/closed” is platform-specific and not currently part of the canonical stage set.
+
 ## Required verbs (MVP)
 
 ### 1) `next`
