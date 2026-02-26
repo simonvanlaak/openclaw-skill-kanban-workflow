@@ -153,6 +153,10 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
    - All user-provided text for `update/ask/complete` is **Markdown**.
    - Adapters may convert Markdown to platform-native formats if required, but Markdown is the canonical input.
 
+## Documentation requirements
+
+- When implementing or changing behavior, keep **README.md** and **SKILL.md** in sync with the current requirements and available commands.
+
 ## Implementation notes (for later)
 
 - These verbs imply the adapter port must support idempotent writes:
