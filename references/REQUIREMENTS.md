@@ -39,7 +39,7 @@ For a selected task, the agent has exactly three user-facing actions:
 
 - `update` — post a progress update (comment only)
 - `complete` — post a **Completed** comment and mark task complete (automatically move it to `stage:in-review`)
-- `ask` — request clarification (and move to `stage:needs-clarification`)
+- `ask` — post a clarification request comment and move the task to `stage:blocked`
 
 ### 3) `start`
 
