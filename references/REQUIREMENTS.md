@@ -67,10 +67,12 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
 
 ## Open questions
 
-1) **Definition of “next”:**
-   - Which stage(s) are eligible? (`stage:ready-to-implement` only vs also `stage:queued`?)
-   - Ordering: FIFO by created time, updated time, priority field, or explicit queue ordering?
-   - What is the scope input? (repo/project/workspace/team)
+1) **Definition of `next`:**
+   - **Guard:** first check whether the agent already has a task in `stage:in-progress`. If yes, `next` must return an error (do not assign a second task).
+   - **Eligible pool:** treat `stage:queued` and `stage:ready-to-implement` as a single combined pool.
+   - **Selection order:** if there is nothing in progress, pull from that combined pool (ordering rule still TBD).
+   - **Empty behavior:** if the combined pool is empty, return an **info** response indicating there is no work to do.
+   - Scope input: repo/project/workspace/team.
 
 2) **`create` payload + assignment details:**
    - Minimal fields: title only, or title + description/body?
