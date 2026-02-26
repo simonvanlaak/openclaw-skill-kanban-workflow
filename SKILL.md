@@ -1,6 +1,6 @@
 ---
 name: clawban
-description: Core "Clawban" skill (TypeScript): a stage-based (stage:backlog/blocked/in-progress/in-review) project-management coworker architecture with CLI-auth adapters (gh, planka, plane, linear), runbooks/SOP assets, polling + snapshot-diff event synthesis, and cron/webhook-friendly entrypoints. Use when designing, implementing, or extending a pluggable PM integration layer for OpenClaw that avoids direct HTTP auth handling.
+description: Clawban is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-auth adapters only (no direct HTTP auth). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
 ---
 
 # Clawban (core)
