@@ -1,12 +1,12 @@
 {
-  "name": "openclaw-skill-clawban",
+  "name": "openclaw-skill-kanban-workflow",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "clawban": "tsx src/cli.ts"
+    "kanban-workflow": "tsx src/cli.ts"
   },
   "dependencies": {
     "execa": "^9.6.0",

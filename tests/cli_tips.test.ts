@@ -94,7 +94,7 @@ describe('cli what-next tips', () => {
     expect(code).toBe(0);
     expect(runSetup).toHaveBeenCalledOnce();
     expect(cap.out.join('')).toMatch(/Wrote config\/clawban\.json/);
-    expect(cap.out.join('')).toMatch(/What next: run `clawban next`/);
+    expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow next`/);
   });
 
   it('prints a what-next tip after next', async () => {
@@ -104,7 +104,7 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(0);
     expect(nextVerb).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/What next: run `clawban start --id <id>`/);
+    expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow start --id <id>`/);
   });
 
   it('prints a what-next tip after start', async () => {
@@ -115,8 +115,8 @@ describe('cli what-next tips', () => {
     expect(code).toBe(0);
     expect(startVerb).toHaveBeenCalledOnce();
     expect(cap.out.join('')).toMatch(/What next: run the actual execution in a subagent/);
-    expect(cap.out.join('')).toMatch(/then `clawban ask --id <id> --text/);
-    expect(cap.out.join('')).toMatch(/or `clawban update --id <id> --text/);
+    expect(cap.out.join('')).toMatch(/then `kanban-workflow ask --id <id> --text/);
+    expect(cap.out.join('')).toMatch(/or `kanban-workflow update --id <id> --text/);
   });
 
   it.each([
@@ -136,6 +136,6 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(1);
     expect(cap.err.join('')).toMatch(/Setup not completed/i);
-    expect(cap.err.join('')).toMatch(/What next: run `clawban setup`/);
+    expect(cap.err.join('')).toMatch(/What next: run `kanban-workflow setup`/);
   });
 });

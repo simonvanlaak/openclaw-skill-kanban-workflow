@@ -16,22 +16,22 @@ export type CliIo = {
 function whatNextTipForCommand(cmd: string): string {
   switch (cmd) {
     case 'setup':
-      return 'run `clawban next`';
+      return 'run `kanban-workflow next`';
     case 'next':
-      return 'run `clawban start --id <id>`';
+      return 'run `kanban-workflow start --id <id>`';
     case 'start':
-      return 'run the actual execution in a subagent; then `clawban ask --id <id> --text "..."` or `clawban update --id <id> --text "..."`';
+      return 'run the actual execution in a subagent; then `kanban-workflow ask --id <id> --text "..."` or `kanban-workflow update --id <id> --text "..."`';
     case 'ask':
-      return 'run `clawban next`';
+      return 'run `kanban-workflow next`';
     case 'update':
-      return 'run `clawban complete --id <id> --summary "..."`';
+      return 'run `kanban-workflow complete --id <id> --summary "..."`';
     case 'complete':
-      return 'run `clawban next`';
+      return 'run `kanban-workflow next`';
     case 'show':
     case 'create':
-      return 'run `clawban next`';
+      return 'run `kanban-workflow next`';
     default:
-      return 'run `clawban next`';
+      return 'run `kanban-workflow next`';
   }
 }
 
@@ -41,7 +41,7 @@ function writeWhatNext(io: CliIo, cmd: string): void {
 
 function writeSetupRequiredError(io: CliIo): void {
   io.stderr.write('Setup not completed: missing or invalid config/clawban.json\n');
-  io.stderr.write('What next: run `clawban setup`\n');
+  io.stderr.write('What next: run `kanban-workflow setup`\n');
 }
 
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {

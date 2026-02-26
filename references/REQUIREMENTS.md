@@ -1,16 +1,16 @@
-# Clawban requirements (draft)
+# Kanban Workflow requirements (draft)
 
-This document captures the initial Q&A requirements for Clawban’s verb-level workflow API.
+This document captures the initial Q&A requirements for Kanban Workflow’s verb-level workflow API.
 
 ## Design constraints
 
 - **Canonical state machine:** use existing `stage:*` lifecycle.
-- **CLI-auth only:** adapters must rely on platform CLIs for authentication/session. No direct HTTP auth handling in Clawban.
+- **CLI-auth only:** adapters must rely on platform CLIs for authentication/session. No direct HTTP auth handling in Kanban Workflow.
 - **Cross-platform:** GitHub, Planka, Plane, Linear.
 
 ## Canonical stage names
 
-Clawban’s canonical stages are (and these are the **only** stages the agent should consider):
+Kanban Workflow’s canonical stages are (and these are the **only** stages the agent should consider):
 
 - `stage:backlog`
 - `stage:blocked`
@@ -22,7 +22,7 @@ Notes:
 
 ## Setup
 
-Clawban must provide a `setup` command to configure enabled adapters and scope/order mappings.
+Kanban Workflow must provide a `setup` command to configure enabled adapters and scope/order mappings.
 
 ### Setup command (flags-only)
 
@@ -30,7 +30,7 @@ Setup must be **non-interactive** and configured entirely via flags.
 
 General:
 - `--adapter <github|plane|linear|planka>` (exactly one)
-- `--force` (required to overwrite an existing `config/clawban.json`)
+- `--force` (required to overwrite an existing `config/kanban-workflow.json`)
 
 Stage mapping (required; all 4 stages):
 - `--map-backlog <platform-name>`
@@ -68,14 +68,14 @@ Adapter-specific scope/order flags:
 
 ### Config
 
-- Config storage: store config in-repo (versionable) under `config/clawban.json`.
+- Config storage: store config in-repo (versionable) under `config/kanban-workflow.json`.
 - Only **one** config file/profile is supported (no multiple profiles).
 
 ## UX requirement: next-step tips
 
 Every verb execution must output a **"What next"** tip.
 
-- If setup is not completed (no valid `config/clawban.json`), **all commands** must error and instruct the user to complete setup.
+- If setup is not completed (no valid `config/kanban-workflow.json`), **all commands** must error and instruct the user to complete setup.
 - After successful `setup`: suggest `next`.
 - After `next`: suggest `start`.
 - After `start`: suggest `ask` or `update`.
@@ -148,7 +148,7 @@ Every verb execution must output a **"What next"** tip.
 
 ## Continuous status updates (5-minute cadence)
 
-While a task is in `stage:in-progress`, Clawban must post an **automatic progress update comment every 5 minutes** describing:
+While a task is in `stage:in-progress`, Kanban Workflow must post an **automatic progress update comment every 5 minutes** describing:
 
 - what is currently being worked on
 - what the next step is
@@ -170,7 +170,7 @@ Reopen target stage:
 
 ## CLI identity discovery (“self”) requirement
 
-For `create` (auto-assign to self) and any future ownership logic, Clawban must be able to discover the current authenticated user from the platform CLI.
+For `create` (auto-assign to self) and any future ownership logic, Kanban Workflow must be able to discover the current authenticated user from the platform CLI.
 
 - **GitHub:** use `gh api user` → `login`
 - **Linear:** use `linear-cli whoami` (viewer)

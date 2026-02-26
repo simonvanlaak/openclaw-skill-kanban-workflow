@@ -1,10 +1,10 @@
-# Clawban architecture review (current → recommended)
+# Kanban Workflow architecture review (current → recommended)
 
 Date: 2026-02-26
 
-This document reviews the current Clawban codebase architecture and proposes a best-practice structure for a sustainable “ports/adapters + command layer + scheduling/automation + state store” design.
+This document reviews the current Kanban Workflow codebase architecture and proposes a best-practice structure for a sustainable “ports/adapters + command layer + scheduling/automation + state store” design.
 
-> Scope: TypeScript library + small CLI in this repo (`openclaw-skill-clawban`).
+> Scope: TypeScript library + small CLI in this repo (`openclaw-skill-kanban-workflow`).
 
 ---
 
@@ -81,8 +81,8 @@ This is fine for an MVP, but becomes brittle as you add:
 
 ### 2.3 No first-class “state store” concept
 
-Clawban has at least 3 categories of state:
-1. **Config** (`config/clawban.json`) — versioned, user-controlled
+Kanban Workflow has at least 3 categories of state:
+1. **Config** (`config/kanban-workflow.json`) — versioned, user-controlled
 2. **Snapshots** (last polled snapshot per adapter) — operational state
 3. **Automation cursors/dedupe** (e.g., last auto-comment time per work item)
 
@@ -204,7 +204,7 @@ This becomes the cron-friendly entrypoint.
 
 ### 3.5 Config + validation
 
-- Keep `config/clawban.json` for the *selected adapter + mapping*.
+- Keep `config/kanban-workflow.json` for the *selected adapter + mapping*.
 - Implement setup validation as a reusable use-case:
   - `validateAdapterReadiness(adapter, config)`
   - returns typed errors: `CliMissing`, `NotAuthenticated`, `PermissionDenied`, etc.
@@ -294,4 +294,4 @@ The recommended architecture keeps auth concerns in platform CLIs:
 
 1. Implement Milestone 1 (ports) — low risk, mostly types.
 2. Implement a JSON file `StateStore` and a `runScheduledPass()` orchestration function.
-3. Decide whether Clawban should ship a first-class `clawban tick` CLI command or remain library-first.
+3. Decide whether Kanban Workflow should ship a first-class `kanban-workflow tick` CLI command or remain library-first.

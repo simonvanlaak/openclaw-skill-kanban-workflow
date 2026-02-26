@@ -1,6 +1,6 @@
-# Clawban adapters
+# Kanban Workflow adapters
 
-Adapters are **CLI-auth** integrations. Clawban does not manage HTTP auth tokens; each adapter relies on a locally configured CLI session.
+Adapters are **CLI-auth** integrations. Kanban Workflow does not manage HTTP auth tokens; each adapter relies on a locally configured CLI session.
 
 ## GitHub
 

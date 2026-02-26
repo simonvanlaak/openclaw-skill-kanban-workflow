@@ -1,10 +1,10 @@
-# Clawban
+# Kanban Workflow
 
 A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-auth adapters** (no direct HTTP auth handling).
 
 ## What it is
 
-Clawban standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
+Kanban Workflow standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
 
 - `stage:backlog`
 - `stage:blocked`
@@ -37,13 +37,13 @@ See `src/adapters/README.md` for links and notes.
 
 ## CLI UX: "What next" tips
 
-Every `clawban <verb>` execution prints a `What next:` tip line to guide the next step in the workflow.
+Every `kanban-workflow <verb>` execution prints a `What next:` tip line to guide the next step in the workflow.
 
-If setup is not completed (missing/invalid `config/clawban.json`), **all commands** will fail with a clear error and instruct you to run `clawban setup`.
+If setup is not completed (missing/invalid `config/kanban-workflow.json`), **all commands** will fail with a clear error and instruct you to run `kanban-workflow setup`.
 
 ### Setup
 
-Setup is flags-only (non-interactive) and writes `config/clawban.json`.
+Setup is flags-only (non-interactive) and writes `config/kanban-workflow.json`.
 
 Common flags:
 - `--adapter <github|plane|linear|planka>`
@@ -63,7 +63,7 @@ Adapter flags:
 
 ### Continuous status updates
 
-While an item is in `stage:in-progress`, Clawban can post an **automatic progress update comment every 5 minutes**. The helper is exported as:
+While an item is in `stage:in-progress`, Kanban Workflow can post an **automatic progress update comment every 5 minutes**. The helper is exported as:
 
 - `runProgressAutoUpdates()` (see `src/automation/progress_updates.ts`)
 
@@ -97,7 +97,7 @@ Adapters live in `src/adapters/`.
 - Linear: uses **linear-cli** (https://github.com/simonvanlaak/linear-cli)
 
 Notes:
-- Clawban itself does **not** handle HTTP auth tokens. Authenticate via the CLI you use.
+- Kanban Workflow itself does **not** handle HTTP auth tokens. Authenticate via the CLI you use.
 - For Plane/Linear, the CLI is an **Api2Cli (a2c)** workspace + wrapper.
 
 ## Status

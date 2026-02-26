@@ -1,9 +1,9 @@
 ---
-name: clawban
-description: Clawban is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-auth adapters only (no direct HTTP auth). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
+name: kanban-workflow
+description: Kanban Workflow is a TypeScript skill for a stage-based agentic co-worker that integrates PM platforms via CLI-auth adapters only (no direct HTTP auth). It provides setup + verbs (show/next/start/update/ask/complete/create) around a canonical stage set (backlog/blocked/in-progress/in-review), plus polling/diffing foundations and automation hooks.
 ---
 
-# Clawban (core)
+# Kanban Workflow (core)
 
 ## Goal
 
@@ -60,24 +60,24 @@ Library entry points:
 - automations: `runProgressAutoUpdates()`
 
 CLI entry point:
-- `src/cli.ts` (provides `clawban <verb>`; see README for setup flags)
+- `src/cli.ts` (provides `kanban-workflow <verb>`; see README for setup flags)
 
 ## CLI ergonomics: "What next" tips
 
-All `clawban <verb>` commands print a `What next:` tip after execution to guide the canonical flow:
+All `kanban-workflow <verb>` commands print a `What next:` tip after execution to guide the canonical flow:
 
 `setup` → `next` → `start` → (`ask` | `update`) → `complete` → `next`
 
 After `start`, the tip additionally reminds you to run the actual execution/implementation work in a **subagent**, then report back via `ask`/`update`.
 
-If `config/clawban.json` is missing or invalid, **all commands** error and instruct you to complete setup.
+If `config/kanban-workflow.json` is missing or invalid, **all commands** error and instruct you to complete setup.
 
 ## Setup (flags-only)
 
-Setup writes `config/clawban.json` and validates that the selected platform CLI is installed + authenticated.
+Setup writes `config/kanban-workflow.json` and validates that the selected platform CLI is installed + authenticated.
 
 Required:
-- `clawban setup --adapter <github|plane|linear|planka> ...`
+- `kanban-workflow setup --adapter <github|plane|linear|planka> ...`
 - stage mapping flags: `--map-backlog`, `--map-blocked`, `--map-in-progress`, `--map-in-review`
 
 Adapter flags (summary):
@@ -88,7 +88,7 @@ Adapter flags (summary):
 
 ## Continuous status updates
 
-While a task is in `stage:in-progress`, Clawban can post an automatic progress update comment every 5 minutes.
+While a task is in `stage:in-progress`, Kanban Workflow can post an automatic progress update comment every 5 minutes.
 Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
 
 ## Recommended repo layout
@@ -106,4 +106,4 @@ Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
 1) Extend the adapter port to include idempotent write operations (comment/transition/label) in addition to `fetchSnapshot()`.
 2) Finish and validate the Plane + Linear adapters (consume `plane-cli` / `linear-cli` output schemas).
 3) Decide on the authoritative mapping rule for stage → platform state (names vs explicit mapping table) and codify it.
-4) Add a small CLI surface for Clawban itself (e.g. `clawban tick --adapter plane --workspace ... --project ...`).
+4) Add a small CLI surface for Kanban Workflow itself (e.g. `kanban-workflow tick --adapter plane --workspace ... --project ...`).

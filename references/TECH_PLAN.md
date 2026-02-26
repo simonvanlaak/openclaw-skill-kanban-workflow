@@ -1,8 +1,8 @@
-# Clawban Core Skill — Technical Plan
+# Kanban Workflow Core Skill — Technical Plan
 
-**Scope**: Define the platform-agnostic “Clawban core” plus a pluggable adapter layer for PM systems (GitHub/Planka/OpenProject/etc.) that uses **CLI-managed auth** (no direct HTTP auth handling in core).
+**Scope**: Define the platform-agnostic “Kanban Workflow core” plus a pluggable adapter layer for PM systems (GitHub/Planka/OpenProject/etc.) that uses **CLI-managed auth** (no direct HTTP auth handling in core).
 
-**Primary entrypoint**: `clawban tick` (deterministic worker pass). Optional: `clawban webhook` only where inbound events are available without managing auth.
+**Primary entrypoint**: `kanban-workflow tick` (deterministic worker pass). Optional: `kanban-workflow webhook` only where inbound events are available without managing auth.
 
 ---
 
@@ -18,7 +18,7 @@
 
 ### Non-goals
 - A full multi-tenant PM product.
-- OAuth/token handling in Clawban core.
+- OAuth/token handling in Kanban Workflow core.
 - Perfect real-time sync (tick cadence is acceptable).
 
 ---
@@ -118,7 +118,7 @@ class ActionResult:
     ok: bool
     message: str | None = None
 
-class ClawbanAdapter(Protocol):
+class Kanban WorkflowAdapter(Protocol):
     adapter_id: str
 
     # --- read
@@ -211,7 +211,7 @@ Support a `--state-backend json` for quick demos:
 
 ## 5) Tick loop algorithm (deterministic)
 
-`clawban tick` performs one pass:
+`kanban-workflow tick` performs one pass:
 
 1) **Load config**
    - adapters enabled, projects to watch, tick options (max items/events), stage rules.
@@ -271,7 +271,7 @@ Normalization should exclude noisy fields (view counts, sync tokens) to avoid ch
 This skill repo currently is documentation/scripts only. Plan for eventual implementation:
 
 ```text
-openclaw-skill-clawban/
+openclaw-skill-kanban-workflow/
   SKILL.md
   references/
     TECH_PLAN.md
@@ -286,7 +286,7 @@ openclaw-skill-clawban/
       gh_list_items.sh
       gh_get_item.sh
   src/ (when code is introduced)
-    clawban/
+    kanban-workflow/
       core/
         engine.py        # tick loop + rule evaluation
         rules.py
@@ -302,7 +302,7 @@ openclaw-skill-clawban/
         openproject/
           adapter.py
       cli/
-        main.py          # `clawban tick`, `clawban webhook`
+        main.py          # `kanban-workflow tick`, `kanban-workflow webhook`
   tests/
     core/
     adapters/
@@ -313,9 +313,9 @@ openclaw-skill-clawban/
 ## 8) Milestones checklist (short)
 
 - [ ] Define canonical domain types (Stage, WorkItem, Event) + JSON schema in `references/schemas/`.
-- [ ] Implement `ClawbanAdapter` port and `PlannedAction` contract in core.
+- [ ] Implement `Kanban WorkflowAdapter` port and `PlannedAction` contract in core.
 - [ ] Implement state backends: SQLite (default) + JSON (fallback).
 - [ ] Implement `tick` engine with dedupe + idempotent action execution.
 - [ ] Implement GitHub adapter using `gh` (poll + snapshot diff) and basic write ops (comment, labels/stage mapping).
-- [ ] Add minimal end-to-end harness: `clawban tick --adapter github --project <repo>`.
+- [ ] Add minimal end-to-end harness: `kanban-workflow tick --adapter github --project <repo>`.
 - [ ] Add regression tests for: stage mapping, snapshot diff → events, action dedupe.
