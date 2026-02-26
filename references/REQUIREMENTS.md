@@ -35,6 +35,8 @@ Notes:
 
 **Goal:** return the next work item the agent should work on.
 
+- `next` must return the same payload shape as `show` (i.e., it should reuse the `show` implementation to display the selected ticket: full body/description, last 10 comments incl. private, and titles of linked/related tickets where supported).
+
 - Primary need: *only* `next` for discovery/selection.
 - Selection policy TBD (see open questions), but should be deterministic.
 
