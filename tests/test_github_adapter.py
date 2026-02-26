@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import sys
+import unittest
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-import pytest
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
 
-from clawban.github_adapter import GhCli, GhCliError, GitHubAdapter
+from clawban.github_adapter import GhCli, GhCliError, GitHubAdapter  # noqa: E402
 
 
 def _read_fixture(name: str) -> str:
@@ -22,101 +26,101 @@ class _Proc:
     stderr: str = ""
 
 
-def test_list_open_issues_with_stage_labels_filters_stage_prefix(monkeypatch: Any, tmp_path: Path) -> None:
-    fixture = _read_fixture("issues_open.json")
+class TestGitHubAdapter(unittest.TestCase):
+    def test_list_open_issues_with_stage_labels_filters_stage_prefix(self) -> None:
+        fixture = _read_fixture("issues_open.json")
 
-    def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
-        assert args[:3] == ["gh", "issue", "list"]
-        return _Proc(returncode=0, stdout=fixture)
+        def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
+            self.assertEqual(args[:3], ["gh", "issue", "list"])
+            return _Proc(returncode=0, stdout=fixture)
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+        with TemporaryDirectory() as td, patch("subprocess.run", new=fake_run):
+            adapter = GitHubAdapter(repo="acme/repo", snapshot_path=Path(td) / "snap.json")
+            issues = adapter.list_open_issues_with_stage_labels()
 
-    adapter = GitHubAdapter(repo="acme/repo", snapshot_path=tmp_path / "snap.json")
-    issues = adapter.list_open_issues_with_stage_labels()
+        self.assertEqual([i.number for i in issues], [101])
+        self.assertTrue(any(lbl.startswith("stage:") for lbl in issues[0].labels))
 
-    assert [i.number for i in issues] == [101]
-    assert issues[0].labels[0].startswith("stage:")
+    def test_add_comment_invokes_gh(self) -> None:
+        called: list[list[str]] = []
 
+        def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
+            called.append(args)
+            return _Proc(returncode=0, stdout="")
 
-def test_add_comment_invokes_gh(monkeypatch: Any, tmp_path: Path) -> None:
-    called: list[list[str]] = []
+        with TemporaryDirectory() as td, patch("subprocess.run", new=fake_run):
+            adapter = GitHubAdapter(repo="acme/repo", snapshot_path=Path(td) / "snap.json")
+            adapter.add_comment(issue_number=12, body="hello")
 
-    def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
-        called.append(args)
-        return _Proc(returncode=0, stdout="")
+        self.assertEqual(
+            called,
+            [
+                [
+                    "gh",
+                    "issue",
+                    "comment",
+                    "12",
+                    "--repo",
+                    "acme/repo",
+                    "--body",
+                    "hello",
+                ]
+            ],
+        )
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+    def test_poll_events_since_uses_snapshot_for_dedupe_and_label_diff(self) -> None:
+        open_fixture = json.loads(_read_fixture("issues_open.json"))
+        updated_fixture = _read_fixture("issues_updated.json")
 
-    adapter = GitHubAdapter(repo="acme/repo", snapshot_path=tmp_path / "snap.json")
-    adapter.add_comment(issue_number=12, body="hello")
+        def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
+            self.assertEqual(args[:3], ["gh", "issue", "list"])
+            self.assertIn("--search", args)
+            return _Proc(returncode=0, stdout=updated_fixture)
 
-    assert called == [
-        [
-            "gh",
-            "issue",
-            "comment",
-            "12",
-            "--repo",
-            "acme/repo",
-            "--body",
-            "hello",
-        ]
-    ]
+        with TemporaryDirectory() as td, patch("subprocess.run", new=fake_run):
+            snap_path = Path(td) / "snap.json"
+            snap_path.write_text(
+                json.dumps(
+                    {
+                        "101": {
+                            "updatedAt": open_fixture[0]["updatedAt"],
+                            "labels": ["stage:queued", "bug"],
+                            "title": "First",
+                            "url": "https://github.com/acme/repo/issues/101",
+                            "state": "OPEN",
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
 
+            adapter = GitHubAdapter(repo="acme/repo", snapshot_path=snap_path)
+            since = datetime(2026, 2, 26, 8, 6, 0, tzinfo=timezone.utc)
+            events = adapter.poll_events_since(since=since)
 
-def test_poll_events_since_uses_snapshot_for_dedupe_and_label_diff(monkeypatch: Any, tmp_path: Path) -> None:
-    open_fixture = json.loads(_read_fixture("issues_open.json"))
-    updated_fixture = _read_fixture("issues_updated.json")
+            self.assertEqual([e.kind for e in events], ["labels_changed", "created"])
+            self.assertEqual(events[0].issue_number, 101)
+            self.assertEqual(events[0].details["added"], ["stage:in-progress"])
+            self.assertEqual(events[0].details["removed"], ["stage:queued"])
+            self.assertEqual(events[1].issue_number, 103)
 
-    # Create a prior snapshot containing issue 101 (with stage:queued)
-    snap_path = tmp_path / "snap.json"
-    snap_path.write_text(
-        json.dumps(
-            {
-                "101": {
-                    "updatedAt": open_fixture[0]["updatedAt"],
-                    "labels": ["stage:queued", "bug"],
-                    "title": "First",
-                    "url": "https://github.com/acme/repo/issues/101",
-                    "state": "OPEN",
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
+            saved = json.loads(snap_path.read_text(encoding="utf-8"))
 
-    def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
-        # poll uses issue list with --search
-        assert args[:3] == ["gh", "issue", "list"]
-        assert "--search" in args
-        return _Proc(returncode=0, stdout=updated_fixture)
-
-    monkeypatch.setattr("subprocess.run", fake_run)
-
-    adapter = GitHubAdapter(repo="acme/repo", snapshot_path=snap_path)
-    since = datetime(2026, 2, 26, 8, 6, 0, tzinfo=timezone.utc)
-    events = adapter.poll_events_since(since=since)
-
-    # 101 changed labels, 103 is new
-    assert [e.kind for e in events] == ["labels_changed", "created"]
-    assert events[0].issue_number == 101
-    assert events[0].details["added"] == ["stage:in-progress"]
-    assert events[0].details["removed"] == ["stage:queued"]
-    assert events[1].issue_number == 103
-
-    # Snapshot should be updated with 103 and new label for 101.
-    saved = json.loads(snap_path.read_text(encoding="utf-8"))
-    assert saved["101"]["labels"] == ["bug", "stage:in-progress"]
-    assert saved["103"]["title"] == "Third"
-    assert saved["_meta"]["repo"] == "acme/repo"
+        self.assertEqual(saved["101"]["labels"], ["bug", "stage:in-progress"])
+        self.assertEqual(saved["103"]["title"], "Third")
+        self.assertEqual(saved["_meta"]["repo"], "acme/repo")
 
 
-def test_ghcli_raises_on_nonzero_return(monkeypatch: Any) -> None:
-    def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
-        return _Proc(returncode=1, stdout="", stderr="nope")
+class TestGhCli(unittest.TestCase):
+    def test_ghcli_raises_on_nonzero_return(self) -> None:
+        def fake_run(args: list[str], check: bool, capture_output: bool, text: bool) -> _Proc:  # type: ignore[override]
+            return _Proc(returncode=1, stdout="", stderr="nope")
 
-    monkeypatch.setattr("subprocess.run", fake_run)
+        with patch("subprocess.run", new=fake_run):
+            gh = GhCli()
+            with self.assertRaises(GhCliError):
+                gh.run(["gh", "status"])
 
-    gh = GhCli()
-    with pytest.raises(GhCliError, match="gh command failed"):
-        gh.run(["gh", "status"])
+
+if __name__ == "__main__":
+    unittest.main()
