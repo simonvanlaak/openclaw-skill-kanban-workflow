@@ -27,7 +27,8 @@ Clawban must provide a `setup` command to configure enabled adapters and scope/o
 - Setup must be **flags-only / non-interactive** (scriptable).
 - Setup currently supports configuring **exactly one** active adapter (GitHub *or* Plane *or* Linear *or* Planka).
 - Setup must collect a **stage mapping** for the selected adapter: map platform-specific state/list names to the 4 canonical stages.
-  - Mapping is required for **all 4** canonical stages (no partial mapping).- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check) and **fail hard** if the selected adapter check fails.
+  - Mapping is required for **all 4** canonical stages (no partial mapping).- Setup must test that required CLIs are installed and authenticated and **fail hard** if the selected adapter check fails.
+  - Setup must validate all **read-only verbs** for the selected adapter: `show` prerequisites (read body/description, list comments, list attachments where supported) and `next` prerequisites (list backlog + ordering inputs).
 - Setup validations are **read-only** (no comments/transitions/creates during setup).
 - Setup must configure the explicit human ordering source (e.g., GitHub Project selection) for the selected adapter.
 - Config storage: store config in-repo (versionable) under `config/clawban.json`.
