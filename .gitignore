@@ -1,1 +1,22 @@
-# Clawban\n\nRepo: openclaw-skill-clawban\n\nSkill display name: Clawban (skill id: clawban).\n
+# Clawban (openclaw-skill-clawban)
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+dist/
+build/
+
+# Virtual envs
+.venv/
+venv/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS
+.DS_Store
