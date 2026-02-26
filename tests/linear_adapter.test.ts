@@ -21,6 +21,41 @@ describe('LinearAdapter', () => {
     (execa as any as ExecaMock).mockReset();
   });
 
+  it('parses whoami output', async () => {
+    (execa as any as ExecaMock).mockResolvedValueOnce({
+      stdout: JSON.stringify({
+        data: {
+          viewer: {
+            id: 'u1',
+            name: 'User One',
+            displayName: 'user1',
+          },
+        },
+      }),
+    });
+
+    const adapter = new LinearAdapter({
+      teamId: 'team-123',
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
+
+    await expect(adapter.whoami()).resolves.toEqual({ id: 'u1', username: 'user1', name: 'User One' });
+
+    expect(execa).toHaveBeenCalledWith(
+      'scripts/linear_json.sh',
+      ['whoami'],
+      expect.objectContaining({
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
+  });
+
   it('lists team issues and maps state.name to canonical Stage', async () => {
     (execa as any as ExecaMock).mockResolvedValueOnce({
       stdout: JSON.stringify({

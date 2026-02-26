@@ -31,7 +31,7 @@ export type LinearAdapterOptions = {
   /**
    * Binary to execute.
    *
-   * Default: `linear` (wrapper script from https://github.com/simonvanlaak/linear-cli)
+   * Default: `scripts/linear_json.sh` (compat wrapper that uses LINEAR_API_KEY)
    */
   bin?: string;
 
@@ -55,12 +55,16 @@ export type LinearAdapterOptions = {
  * Linear adapter (CLI-auth only).
  *
  * Expected CLI:
- * - https://github.com/simonvanlaak/linear-cli
+ * - ClawHub skill: `linear` (owner: ManuelHettich)
+ * - This repo provides `scripts/linear_json.sh` as a tiny JSON compatibility wrapper.
  *
  * It should support:
+ * - `whoami`
  * - `issues-team <team_id>`
  * - `issues-project <project_id>`
- * and return JSON containing `data.issues.nodes[]`.
+ * - (optional) `issues-view <view_id>`
+ *
+ * And return JSON containing `data.issues.nodes[]`.
  */
 export class LinearAdapter implements Adapter {
   private readonly cli: CliRunner;
@@ -71,7 +75,7 @@ export class LinearAdapter implements Adapter {
   private readonly stageMap: Readonly<Record<string, StageKey>>;
 
   constructor(opts: LinearAdapterOptions) {
-    this.cli = new CliRunner(opts.bin ?? 'linear');
+    this.cli = new CliRunner(opts.bin ?? 'scripts/linear_json.sh');
     this.baseArgs = opts.baseArgs ?? [];
     this.viewId = opts.viewId;
     this.teamId = opts.teamId;
@@ -170,9 +174,16 @@ export class LinearAdapter implements Adapter {
   }
 
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
+    // Best-effort view support.
+    //
+    // The legacy linear-cli exposed "view order" via `issues-view <viewId>`.
+    // The ClawHub `linear` skill wrapper is JSON-first but does not currently expose
+    // view ordering. We keep the flag for backward compatibility and try it first;
+    // if it yields no issues, we fall back to team/project snapshots ordered by updatedAt.
     if (this.viewId) {
-      // Explicit ordering via view id.
-      return this.fetchSnapshotFromView(this.viewId);
+      const fromView = await this.fetchSnapshotFromView(this.viewId);
+      if (fromView.size > 0) return fromView;
+      // else fall through
     }
 
     if ((this.teamId && this.projectId) || (!this.teamId && !this.projectId)) {
@@ -188,10 +199,7 @@ export class LinearAdapter implements Adapter {
   }
 
   private async fetchSnapshotFromView(viewId: string): Promise<ReadonlyMap<string, WorkItem>> {
-    // Requirement: explicit ordering via view id. We assume linear-cli exposes a read-only
-    // command that returns issues for a view in that view's manual order.
-    //
-    // Expected (by convention): `linear issues-view <view_id>`.
+    // Optional compatibility command.
     const out = await this.cli.run([...this.baseArgs, 'issues-view', viewId]);
     return this.parseIssuesJson(out);
   }

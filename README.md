@@ -23,8 +23,8 @@ It provides:
 Currently supported adapters:
 - **GitHub** via `gh` (in-repo adapter)
 - **Planka** via `planka-cli` (voydz/planka-cli)
-- **Plane** via `plane-cli` (simonvanlaak/plane-cli; a2c workspace)
-- **Linear** via `linear-cli` (simonvanlaak/linear-cli; a2c workspace)
+- **Plane** via ClawHub skill `plane` (owner: `vaguilera-jinko`)
+- **Linear** via ClawHub skill `linear` (ManuelHettich) + this repo’s `scripts/linear_json.sh` compatibility wrapper
 
 See `src/adapters/README.md` for links and notes.
 
@@ -71,7 +71,7 @@ While an item is in `stage:in-progress`, Kanban Workflow can post an **automatic
 
 Kanban Workflow **does not** handle platform HTTP auth tokens directly.
 
-Instead, it shells out to a platform-specific CLI (e.g. `gh`, `plane`, `linear`, `planka-cli`) and therefore acts with the **same privileges as that CLI session** on the host machine.
+Instead, it shells out to a platform-specific CLI (e.g. `gh`, `plane`, `scripts/linear_json.sh`, `planka-cli`) and therefore acts with the **same privileges as that CLI session** on the host machine.
 
 Implications:
 - Anything the authenticated CLI can read/write, this skill can read/write.
@@ -86,8 +86,8 @@ Prereqs:
 - Adapter CLI(s) for the platform you plan to use:
   - GitHub: `gh`
   - Planka: `planka-cli`
-  - Plane: `plane` (plane-cli wrapper) and/or `a2c`
-  - Linear: `linear` (linear-cli wrapper) and/or `a2c`
+  - Plane: ClawHub skill `plane` (binary `plane`; requires `PLANE_API_KEY` + `PLANE_WORKSPACE`)
+  - Linear: `curl` + `jq` + `LINEAR_API_KEY` (via ClawHub skill `linear`); Kanban Workflow calls `scripts/linear_json.sh`
 
 Install dependencies:
 ```bash
@@ -110,12 +110,11 @@ Adapters live in `src/adapters/`.
 
 - GitHub: uses **GitHub CLI** (`gh`, incl. `gh api`)
 - Planka: uses **planka-cli** (https://github.com/voydz/planka-cli)
-- Plane: uses **plane-cli** (https://github.com/simonvanlaak/plane-cli)
-- Linear: uses **linear-cli** (https://github.com/simonvanlaak/linear-cli)
+- Plane: uses ClawHub skill **`plane`** (owner: `vaguilera-jinko`) (binary `plane`; env: `PLANE_API_KEY`, `PLANE_WORKSPACE`).
+- Linear: uses ClawHub skill **`linear`** (ManuelHettich) auth convention (`LINEAR_API_KEY`) via this repo’s `scripts/linear_json.sh` wrapper.
 
 Notes:
-- Kanban Workflow itself does **not** handle HTTP auth tokens. Authenticate via the CLI you use.
-- For Plane/Linear, the CLI is an **Api2Cli (a2c)** workspace + wrapper.
+- Kanban Workflow itself does **not** manage platform auth flows.
 
 ## Status
 

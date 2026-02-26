@@ -173,8 +173,8 @@ Reopen target stage:
 For `create` (auto-assign to self) and any future ownership logic, Kanban Workflow must be able to discover the current authenticated user from the platform CLI.
 
 - **GitHub:** use `gh api user` → `login`
-- **Linear:** use `linear-cli whoami` (viewer)
-- **Plane:** use `plane-cli` request `/api/v1/users/me/`
+- **Linear:** use `scripts/linear_json.sh whoami` (JSON; requires `LINEAR_API_KEY`)
+- **Plane:** use ClawHub skill `plane` (owner: `vaguilera-jinko`): `plane me` (JSON)
 - **Planka:** `planka-cli status` shows the current user, but output is human-formatted.
   - **Recommended approach:** ship a small **wrapper script** (CLI-auth compliant) that returns `whoami` as **JSON** for Planka, rather than parsing formatted output.
 

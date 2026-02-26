@@ -18,18 +18,20 @@ requirements:
     planka:
       binaries: [planka-cli]
     plane:
-      # plane-cli is an Api2Cli (a2c) workspace wrapper by default.
-      binaries: [plane, a2c]
+      # ClawHub skill `plane` (owner: vaguilera-jinko)
+      binaries: [plane]
     linear:
-      # linear-cli is an Api2Cli (a2c) workspace wrapper by default.
-      binaries: [linear, a2c]
+      # Uses LINEAR_API_KEY (ClawHub skill `linear`, owner: ManuelHettich) via scripts/linear_json.sh.
+      binaries: [bash, curl, jq]
 
   # Environment variables
   env:
     # No env vars are required by Kanban Workflow itself.
     # Auth is inherited from the selected platform CLI.
     required: []
-    optional: []
+    optional:
+      # Required when using the Linear adapter (via ClawHub skill `linear`).
+      - LINEAR_API_KEY
 ---
 
 # Kanban Workflow (core)
@@ -69,7 +71,7 @@ Adapters map platform concepts (labels, lists, statuses, custom fields) into thi
 
 Adapters are “smart wrappers” that:
 
-- Call existing CLIs (e.g. `gh`, `planka-cli`, `plane-cli`, `linear-cli`), relying on their auth/session.
+- Call existing CLIs (e.g. `gh`, `planka-cli`, `plane-cli`), relying on their auth/session (Linear uses `LINEAR_API_KEY` via the ClawHub skill `linear`).
 - Compose multiple CLI calls to implement higher-level operations.
 - Synthesize events by polling + snapshot diffing when webhooks or event types are missing.
 
@@ -77,7 +79,7 @@ Canonical adapter entrypoints live in `src/adapters/`:
 - `github.ts` (gh CLI)
 - `planka.ts` (planka-cli)
 - `plane.ts` (plane-cli; Api2Cli workspace)
-- `linear.ts` (linear-cli; Api2Cli workspace)
+- `linear.ts` (ClawHub skill `linear` auth convention via `scripts/linear_json.sh`)
 
 See also: `src/adapters/README.md` for CLI links and assumptions.
 
@@ -133,6 +135,6 @@ Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
 ## Next implementation steps
 
 1) Extend the adapter port to include idempotent write operations (comment/transition/label) in addition to `fetchSnapshot()`.
-2) Finish and validate the Plane + Linear adapters (consume `plane-cli` / `linear-cli` output schemas).
+2) Finish and validate the Plane + Linear adapters (consume `plane-cli` output schema; Linear uses `scripts/linear_json.sh` JSON compatibility wrapper).
 3) Decide on the authoritative mapping rule for stage → platform state (names vs explicit mapping table) and codify it.
 4) Add a small CLI surface for Kanban Workflow itself (e.g. `kanban-workflow tick --adapter plane --workspace ... --project ...`).

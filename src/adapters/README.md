@@ -10,15 +10,14 @@ Adapters are **CLI-auth** integrations. Kanban Workflow does not manage HTTP aut
 
 ## Linear
 
-- Canonical CLI: **linear-cli** (a2c-based)
-  - https://github.com/simonvanlaak/linear-cli
+- Auth + conventions: ClawHub skill **`linear`** (owner: ManuelHettich)
+  - Requires `LINEAR_API_KEY`
+  - Provides `{baseDir}/scripts/linear.sh` for interactive use
 
-The adapter defaults to calling a `linear` wrapper on your `PATH` (recommended), as provided by `linear-cli`.
+Kanban Workflow’s `LinearAdapter` expects a **JSON-first** CLI surface.
+This repo provides `scripts/linear_json.sh` as a small compatibility wrapper that speaks Linear GraphQL and outputs the JSON schema the adapter consumes.
 
-If you prefer calling Api2Cli directly, configure:
-
-- `bin: "a2c"`
-- `baseArgs: ["--config", "<path-to-linear-cli>/a2c", "--workspace", "linear"]`
+Advanced usage: you can still point the adapter at a different JSON-capable binary via `bin` + `baseArgs`.
 
 ## Planka
 
