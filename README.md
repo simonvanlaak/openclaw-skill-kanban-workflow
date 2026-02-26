@@ -36,6 +36,12 @@ See `src/adapters/README.md` for links and notes.
 - `tests/` — vitest tests
 - `references/` — technical plan and notes
 
+## CLI UX: "What next" tips
+
+Every `clawban <verb>` execution prints a `What next:` tip line to guide the next step in the workflow.
+
+If setup is not completed (missing/invalid `config/clawban.json`), commands will fail with a clear error and instruct you to run `clawban setup`.
+
 ## Development
 
 Prereqs:

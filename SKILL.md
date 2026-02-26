@@ -58,6 +58,12 @@ See also: `src/adapters/README.md` for CLI links and assumptions.
 - `clawban tick`: one deterministic pass (poll → normalize → apply rules → emit actions)
 - `clawban webhook`: optional inbound webhook receiver *only where feasible without taking over auth*
 
+## CLI ergonomics: "What next" tips
+
+All `clawban <verb>` commands print a `What next:` tip after execution to guide the canonical flow (setup → next → start → ask/update → complete → next).
+
+If `config/clawban.json` is missing or invalid, commands error and instruct you to complete setup.
+
 ## Recommended repo layout
 
 - `scripts/`: deterministic helper scripts used by adapters or the core.

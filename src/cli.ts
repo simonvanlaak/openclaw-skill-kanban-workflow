@@ -13,6 +13,37 @@ export type CliIo = {
   stderr: { write(chunk: string): void };
 };
 
+function whatNextTipForCommand(cmd: string): string {
+  switch (cmd) {
+    case 'setup':
+      return 'run `clawban next`';
+    case 'next':
+      return 'run `clawban start --id <id>`';
+    case 'start':
+      return 'run `clawban ask --id <id> --text "..."` or `clawban update --id <id> --text "..."`';
+    case 'ask':
+      return 'run `clawban next`';
+    case 'update':
+      return 'run `clawban complete --id <id> --summary "..."`';
+    case 'complete':
+      return 'run `clawban next`';
+    case 'show':
+    case 'create':
+      return 'run `clawban next`';
+    default:
+      return 'run `clawban next`';
+  }
+}
+
+function writeWhatNext(io: CliIo, cmd: string): void {
+  io.stdout.write(`What next: ${whatNextTipForCommand(cmd)}\n`);
+}
+
+function writeSetupRequiredError(io: CliIo): void {
+  io.stderr.write('Setup not completed: missing or invalid config/clawban.json\n');
+  io.stderr.write('What next: run `clawban setup`\n');
+}
+
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
   const [cmd = 'help', ...rest] = argv;
   const flags: Record<string, string | boolean | string[]> = {};
@@ -142,21 +173,31 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       });
 
       io.stdout.write(`Wrote ${configPath}\n`);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
-    const config = await loadConfigFromFile({ fs, path: configPath });
+    let config: any;
+    try {
+      config = await loadConfigFromFile({ fs, path: configPath });
+    } catch {
+      writeSetupRequiredError(io);
+      return 1;
+    }
+
     const adapter = await adapterFromConfig(config.adapter);
 
     if (cmd === 'show') {
       const id = String(flags.id ?? '');
       if (!id) throw new Error('show requires --id');
       io.stdout.write(`${JSON.stringify(await show(adapter, id), null, 2)}\n`);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
     if (cmd === 'next') {
       io.stdout.write(`${JSON.stringify(await next(adapter), null, 2)}\n`);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
@@ -164,6 +205,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const id = String(flags.id ?? '');
       if (!id) throw new Error('start requires --id');
       await start(adapter, id);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
@@ -173,6 +215,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       if (!id) throw new Error('update requires --id');
       if (!text) throw new Error('update requires --text');
       await update(adapter, id, text);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
@@ -182,6 +225,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       if (!id) throw new Error('ask requires --id');
       if (!text) throw new Error('ask requires --text');
       await ask(adapter, id, text);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
@@ -191,6 +235,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       if (!id) throw new Error('complete requires --id');
       if (!summary) throw new Error('complete requires --summary');
       await complete(adapter, id, summary);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
@@ -199,6 +244,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const body = String(flags.body ?? '');
       if (!title) throw new Error('create requires --title');
       io.stdout.write(`${JSON.stringify(await create(adapter, { title, body }), null, 2)}\n`);
+      writeWhatNext(io, cmd);
       return 0;
     }
 
