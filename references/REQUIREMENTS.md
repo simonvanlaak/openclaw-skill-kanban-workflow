@@ -79,6 +79,7 @@ Every verb execution must output a **"What next"** tip.
 - After successful `setup`: suggest `next`.
 - After `next`: suggest `start`.
 - After `start`: suggest `ask` or `update`.
+  - Additionally, after `start` include a tip to run the actual execution/implementation work in a **subagent**.
 - After `ask`: suggest `next`.
 - After `update`: suggest `complete`.
 - After `complete`: suggest `next`.
@@ -144,6 +145,15 @@ Every verb execution must output a **"What next"** tip.
 - Assignment verbs (`assign`, `unassign`) are **not** needed beyond `create` auto-assign.
 - Explicit `transition` to `stage:in-review` is **not** needed (happens automatically on `complete`).
 - `sync-stages` is **not** needed.
+
+## Continuous status updates (5-minute cadence)
+
+While a task is in `stage:in-progress`, Clawban must post an **automatic progress update comment every 5 minutes** describing:
+
+- what is currently being worked on
+- what the next step is
+
+This should stop when the task leaves `stage:in-progress`.
 
 ## Automation rules
 
