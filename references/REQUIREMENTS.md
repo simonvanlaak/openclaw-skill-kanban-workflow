@@ -93,6 +93,7 @@ For `create` (auto-assign to self) and any future ownership logic, Clawban must 
 
 1) **Definition of `next`:**
    - **Guard:** first check whether the agent already has a task in `stage:in-progress`. If yes, `next` must return an error (do not assign a second task).
+   - **Ignore in-review:** `next` ignores tickets in `stage:in-review`.
    - **Eligible pool:** if there is nothing in progress, pull from `stage:backlog`.
    - **Empty behavior:** if `stage:backlog` is empty, return an **info** response indicating there is no work to do.
    - Scope input: repo/project/workspace/team.
