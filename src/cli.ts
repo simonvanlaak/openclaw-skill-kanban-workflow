@@ -6,6 +6,8 @@ import { GitHubAdapter } from './adapters/github.js';
 import { LinearAdapter } from './adapters/linear.js';
 import { PlaneAdapter } from './adapters/plane.js';
 import { PlankaAdapter } from './adapters/planka.js';
+import { runAutopilotTick } from './automation/autopilot_tick.js';
+import { lockfile } from './automation/lockfile.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
 
 export type CliIo = {
@@ -27,6 +29,8 @@ function whatNextTipForCommand(cmd: string): string {
       return 'run `kanban-workflow complete --id <id> --summary "..."`';
     case 'complete':
       return 'run `kanban-workflow next`';
+    case 'autopilot-tick':
+      return 'if a ticket was started, your autopilot agent should `kanban-workflow show --id <id>` and begin work; otherwise wait and retry';
     case 'show':
     case 'create':
       return 'run `kanban-workflow next`';
@@ -201,6 +205,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       });
 
       io.stdout.write(`Wrote ${configPath}\n`);
+      io.stdout.write('Autopilot suggestion: schedule a cron tick (OpenClaw) to run `kanban-workflow autopilot-tick` every 1-5 minutes.\n');
       writeWhatNext(io, cmd);
       return 0;
     }
@@ -219,6 +224,13 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const id = String(flags.id ?? '');
       if (!id) throw new Error('show requires --id');
       io.stdout.write(`${JSON.stringify(await show(adapter, id), null, 2)}\n`);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
+    if (cmd === 'autopilot-tick') {
+      const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
+      io.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
       writeWhatNext(io, cmd);
       return 0;
     }
