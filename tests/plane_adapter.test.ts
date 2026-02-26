@@ -19,7 +19,7 @@ describe('PlaneAdapter', () => {
     (execa as any as ExecaMock).mockReset();
   });
 
-  it('lists workitems and maps state.name to canonical Stage', async () => {
+  it('lists issues and maps state.name to canonical Stage', async () => {
     (execa as any as ExecaMock).mockResolvedValueOnce({
       stdout: JSON.stringify([
         {
@@ -52,6 +52,15 @@ describe('PlaneAdapter', () => {
 
     const snap = await adapter.fetchSnapshot();
 
+    expect(execa).toHaveBeenCalledWith(
+      'plane',
+      ['issues', 'list', '-p', 'proj', '-f', 'json'],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
+
     expect(Array.from(snap.keys())).toEqual(['i2']);
     expect(snap.get('i2')?.stage.toString()).toBe('stage:backlog');
     expect(snap.get('i2')?.labels).toEqual(['bug', 'stage:backlog']);
@@ -77,6 +86,15 @@ describe('PlaneAdapter', () => {
     });
 
     const snap = await adapter.fetchSnapshot();
+
+    expect(execa).toHaveBeenCalledWith(
+      'plane',
+      ['issues', 'list', '-p', 'proj', '-f', 'json'],
+      {
+        stdout: 'pipe',
+        stderr: 'pipe',
+      },
+    );
 
     expect(snap.get('i3')?.stage.toString()).toBe('stage:in-progress');
   });

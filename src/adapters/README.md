@@ -30,15 +30,15 @@ The adapter defaults to calling `planka-cli cards list --json`. If your installe
 ## Plane
 
 - Project: https://github.com/makeplane/plane
-- Canonical CLI: **plane-cli** (a2c-based)
-  - https://github.com/simonvanlaak/plane-cli
+- CLI: ClawHub skill **`plane`** (owner: `vaguilera-jinko`)
+  - Binary: `plane`
 
-The adapter defaults to calling a `plane` wrapper on your `PATH` (recommended), as provided by `plane-cli`.
+Auth is handled by the `plane` CLI via environment variables:
 
-If you prefer calling Api2Cli directly, configure:
+- `PLANE_API_KEY`
+- `PLANE_WORKSPACE`
 
-- `bin: "a2c"`
-- `baseArgs: ["--config", "<path-to-plane-cli>/a2c", "--workspace", "plane"]`
+The adapter calls the `plane` binary directly (no a2c workspace wrapper).
 
 ## Contributing a new adapter
 

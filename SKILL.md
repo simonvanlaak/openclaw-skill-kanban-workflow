@@ -30,6 +30,9 @@ requirements:
     # Auth is inherited from the selected platform CLI.
     required: []
     optional:
+      # Required when using the Plane adapter (via ClawHub skill `plane`).
+      - PLANE_API_KEY
+      - PLANE_WORKSPACE
       # Required when using the Linear adapter (via ClawHub skill `linear`).
       - LINEAR_API_KEY
 ---
@@ -71,14 +74,14 @@ Adapters map platform concepts (labels, lists, statuses, custom fields) into thi
 
 Adapters are “smart wrappers” that:
 
-- Call existing CLIs (e.g. `gh`, `planka-cli`, `plane-cli`), relying on their auth/session (Linear uses `LINEAR_API_KEY` via the ClawHub skill `linear`).
+- Call existing CLIs (e.g. `gh`, `planka-cli`, `plane`), relying on their auth/session (Plane uses `PLANE_API_KEY` + `PLANE_WORKSPACE`; Linear uses `LINEAR_API_KEY` via the ClawHub skill `linear`).
 - Compose multiple CLI calls to implement higher-level operations.
 - Synthesize events by polling + snapshot diffing when webhooks or event types are missing.
 
 Canonical adapter entrypoints live in `src/adapters/`:
 - `github.ts` (gh CLI)
 - `planka.ts` (planka-cli)
-- `plane.ts` (plane-cli; Api2Cli workspace)
+- `plane.ts` (ClawHub skill `plane` CLI; owner: `vaguilera-jinko`)
 - `linear.ts` (ClawHub skill `linear` auth convention via `scripts/linear_json.sh`)
 
 See also: `src/adapters/README.md` for CLI links and assumptions.
@@ -135,6 +138,6 @@ Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
 ## Next implementation steps
 
 1) Extend the adapter port to include idempotent write operations (comment/transition/label) in addition to `fetchSnapshot()`.
-2) Finish and validate the Plane + Linear adapters (consume `plane-cli` output schema; Linear uses `scripts/linear_json.sh` JSON compatibility wrapper).
+2) Finish and validate the Plane + Linear adapters (consume ClawHub skill `plane` output schema; Linear uses `scripts/linear_json.sh` JSON compatibility wrapper).
 3) Decide on the authoritative mapping rule for stage → platform state (names vs explicit mapping table) and codify it.
 4) Add a small CLI surface for Kanban Workflow itself (e.g. `kanban-workflow tick --adapter plane --workspace ... --project ...`).
