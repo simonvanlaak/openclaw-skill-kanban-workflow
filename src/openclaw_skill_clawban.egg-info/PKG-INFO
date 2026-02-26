@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: openclaw-skill-clawban
+Version: 0.0.0
+Summary: Clawban skill: stage-based PM coworker with CLI-auth adapters
+Requires-Python: >=3.10
