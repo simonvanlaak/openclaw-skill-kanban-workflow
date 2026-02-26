@@ -20,6 +20,15 @@ Clawban’s canonical stages are (and these are the **only** stages the agent sh
 Notes:
 - “Done/closed” is platform-specific and not currently part of the canonical stage set.
 
+## Setup
+
+Clawban must provide a `setup` command to configure enabled adapters and scope/order mappings.
+
+- Setup should allow selecting which adapters to use (GitHub/Plane/Linear/Planka).
+- Setup must test that required CLIs are installed and authenticated (at least a `whoami` check + a read/list check).
+- Setup must configure the explicit human ordering source (e.g., GitHub Project selection) per adapter.
+- Config storage (chosen): store config in-repo (versionable) under `config/clawban.json`.
+
 ## Required verbs (MVP)
 
 ### 0) `show`
