@@ -1,3 +1,4 @@
+import type { Actor } from '../core/ports.js';
 import type { StageKey } from '../stage.js';
 
 export type AutopilotTickResult =
@@ -6,17 +7,34 @@ export type AutopilotTickResult =
   | { kind: 'started'; id: string };
 
 export type AutopilotTickPort = {
+  whoami(): Promise<Actor>;
   listIdsByStage(stage: StageKey): Promise<string[]>;
   listBacklogIdsInOrder(): Promise<string[]>;
+  getWorkItem(id: string): Promise<{ assignees?: Actor[] }>;
   setStage(id: string, stage: StageKey): Promise<void>;
 };
 
 // Verb adapters already satisfy this shape; keep export for clarity.
 
-
 export type AutopilotLockPort = {
   tryAcquireLock(path: string, now: Date, ttlMs: number): Promise<{ release: () => Promise<void> }>;
 };
+
+function actorKeys(actor?: Actor): string[] {
+  if (!actor) return [];
+  return [actor.id, actor.username, actor.name]
+    .filter((x): x is string => Boolean(x && String(x).trim().length > 0))
+    .map((x) => String(x).trim().toLowerCase());
+}
+
+function isAssignedToSelf(assignees: readonly Actor[] | undefined, me: Actor): boolean {
+  if (!assignees || assignees.length === 0) return false;
+
+  const meKeys = new Set(actorKeys(me));
+  if (meKeys.size === 0) return false;
+
+  return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
+}
 
 export async function runAutopilotTick(opts: {
   adapter: AutopilotTickPort;
@@ -30,12 +48,21 @@ export async function runAutopilotTick(opts: {
 
   const acquired = await opts.lock.tryAcquireLock(lockPath, opts.now, ttlMs);
   try {
+    const me = await opts.adapter.whoami();
     const inProgressIds = await opts.adapter.listIdsByStage('stage:in-progress');
-    if (inProgressIds.length > 1) {
-      // Hardening: auto-heal WIP drift by keeping one active item and moving
-      // all additional in-progress items back to backlog.
-      const keepId = inProgressIds[0]!;
-      for (const id of inProgressIds.slice(1)) {
+
+    // WIP gating is personal: only in-progress items explicitly assigned to me
+    // count against my limit. Unassigned / other-user in-progress items are ignored.
+    const ownInProgressIds: string[] = [];
+    for (const id of inProgressIds) {
+      const item = await opts.adapter.getWorkItem(id);
+      if (isAssignedToSelf(item.assignees, me)) ownInProgressIds.push(id);
+    }
+
+    if (ownInProgressIds.length > 1) {
+      // Auto-heal only my own WIP drift, keep deterministic primary item (first in adapter order).
+      const keepId = ownInProgressIds[0]!;
+      for (const id of ownInProgressIds.slice(1)) {
         await opts.adapter.setStage(id, 'stage:backlog');
       }
       return {
@@ -45,11 +72,11 @@ export async function runAutopilotTick(opts: {
       };
     }
 
-    if (inProgressIds.length > 0) {
+    if (ownInProgressIds.length > 0) {
       return {
         kind: 'in_progress',
-        id: inProgressIds[0]!,
-        inProgressIds,
+        id: ownInProgressIds[0]!,
+        inProgressIds: ownInProgressIds,
       };
     }
 
