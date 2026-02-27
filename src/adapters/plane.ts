@@ -107,6 +107,10 @@ export class PlaneAdapter implements Adapter {
     return out.trim().length > 0 ? JSON.parse(out) : null;
   }
 
+  private async getIssueRaw(projectId: string, id: string): Promise<any> {
+    return (await this.runJson(['issues', 'get', '--project', projectId, String(id)])) ?? {};
+  }
+
   private statesCache?: PlaneState[];
 
   private getSingleProjectId(forWhat: string): string {
@@ -350,16 +354,45 @@ export class PlaneAdapter implements Adapter {
 
   async addComment(id: string, body: string): Promise<void> {
     const projectId = this.getSingleProjectId('addComment');
+    const msg = String(body || '').trim();
+    if (!msg) return;
+
+    try {
+      await this.cli.run([
+        ...this.baseArgs,
+        ...this.formatArgs,
+        'comments',
+        'add',
+        '--project',
+        projectId,
+        '--issue',
+        id,
+        msg,
+      ]);
+      return;
+    } catch (err: any) {
+      const text = String(err?.message ?? err ?? '');
+      if (!/405|Method \"POST\" not allowed/i.test(text)) throw err;
+    }
+
+    // Fallback for Plane deployments where comments POST is disabled:
+    // append heartbeat/update text into description so progress is still visible.
+    const issue = await this.getIssueRaw(projectId, String(id));
+    const existing = String(issue?.description ?? issue?.description_html ?? '').trim();
+    const stamp = new Date().toISOString();
+    const line = `[${stamp}] ${msg}`;
+    const next = existing ? `${existing}\n\n${line}` : line;
+
     await this.cli.run([
       ...this.baseArgs,
       ...this.formatArgs,
-      'comments',
-      'add',
+      'issues',
+      'update',
       '--project',
       projectId,
-      '--issue',
-      id,
-      body,
+      '--description',
+      next,
+      String(id),
     ]);
   }
 
