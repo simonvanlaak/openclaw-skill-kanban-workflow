@@ -136,6 +136,43 @@ export class PlaneAdapter implements Adapter {
     }
   }
 
+
+  private async listCommentsViaApi(projectId: string, id: string): Promise<any[]> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane comments API');
+    }
+
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const url = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Plane comments API failed: HTTP ${res.status} ${txt}`);
+    }
+
+    const json = await res.json().catch(() => ({}));
+    if (Array.isArray(json)) return json;
+    if (json && typeof json === 'object' && Array.isArray((json as any).results)) return (json as any).results;
+    return [];
+  }
+
+  private stripHtml(input: string): string {
+    return String(input || '')
+      .replace(/<br\s*\/?\s*>/gi, '\\n')
+      .replace(/<\/p>/gi, '\\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim();
+  }
+
   private statesCache?: PlaneState[];
 
   private getSingleProjectId(forWhat: string): string {
@@ -349,10 +386,23 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listComments(
-    _id: string,
-    _opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+    id: string,
+    opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
   ): Promise<Array<{ id: string; body: string }>> {
-    return [];
+    const projectId = this.getSingleProjectId('listComments');
+    const raw = await this.listCommentsViaApi(projectId, id);
+
+    const mapped = raw
+      .map((c: any) => ({
+        id: String(c?.id ?? ''),
+        body: this.stripHtml(String(c?.comment_html ?? c?.comment ?? c?.body ?? '')),
+        createdAt: String(c?.created_at ?? ''),
+      }))
+      .filter((c) => c.id && c.body);
+
+    mapped.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); // newest first
+    const ordered = opts.newestFirst ? mapped : [...mapped].reverse();
+    return ordered.slice(0, Math.max(1, opts.limit)).map(({ id, body }) => ({ id, body }));
   }
 
   async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
@@ -433,7 +483,7 @@ export class PlaneAdapter implements Adapter {
   private async fetchSnapshotForProject(projectId: string, issuesRaw?: unknown): Promise<ReadonlyMap<string, WorkItem>> {
     const out = JSON.stringify(
       normalizePlaneIssuesList(
-        issuesRaw ?? ((await this.runJson(['issues', 'list', '--project', projectId])) ?? []),
+        issuesRaw ?? ((await this.runJson(['issues', 'list', '-p', projectId])) ?? []),
       ),
     );
 
