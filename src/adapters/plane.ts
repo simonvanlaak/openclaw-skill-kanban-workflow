@@ -213,7 +213,11 @@ export class PlaneAdapter implements Adapter {
       // only pick items explicitly assigned to me.
       if (meId) {
         backlog = backlog.filter((i) =>
-          (i.assignees ?? []).some((a) => (a.id ? String(a.id) === String(meId) : false)),
+          (i.assignees ?? []).some((a) => {
+            if (typeof a === 'string') return String(a) === String(meId);
+            const aid = (a as any)?.id;
+            return aid ? String(aid) === String(meId) : false;
+          }),
         );
       }
 
@@ -434,6 +438,26 @@ export class PlaneAdapter implements Adapter {
           .optional()
           .default([])
           .transform((arr) => arr.map((x) => x.name)),
+        assignees: z
+          .array(
+            z.union([
+              z.string().transform((id) => ({ id })),
+              z
+                .object({
+                  id: z.union([z.string(), z.number()]).optional(),
+                  name: z.string().optional(),
+                  username: z.string().optional(),
+                })
+                .passthrough()
+                .transform((a) => ({
+                  id: a.id != null ? String(a.id) : undefined,
+                  name: a.name,
+                  username: a.username,
+                })),
+            ]),
+          )
+          .optional()
+          .default([]),
       })
       .passthrough();
 
@@ -465,6 +489,7 @@ export class PlaneAdapter implements Adapter {
         stage,
         url: issue.url,
         labels: issue.labels,
+        assignees: issue.assignees,
         updatedAt: updatedAtRaw ? new Date(updatedAtRaw) : undefined,
         raw: issue,
       });
