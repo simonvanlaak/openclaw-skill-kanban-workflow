@@ -122,6 +122,17 @@ export class PlaneAdapter implements Adapter {
     const projectId = this.getSingleProjectId('setStage');
 
     const raw = (await this.runJson(['states', '--project', projectId])) ?? [];
+    const statesRaw = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? (raw as any).results && Array.isArray((raw as any).results)
+          ? (raw as any).results
+          : (raw as any).items && Array.isArray((raw as any).items)
+            ? (raw as any).items
+            : (raw as any).data && Array.isArray((raw as any).data)
+              ? (raw as any).data
+              : []
+        : [];
 
     const StateSchema = z
       .object({
@@ -130,7 +141,7 @@ export class PlaneAdapter implements Adapter {
       })
       .passthrough();
 
-    const states = z.array(StateSchema).parse(raw);
+    const states = z.array(StateSchema).parse(statesRaw);
     this.statesCache = states;
     return states;
   }
@@ -390,10 +401,15 @@ export class PlaneAdapter implements Adapter {
     );
 
     const StateSchema = z
-      .object({
-        name: z.string().optional(),
-      })
-      .passthrough();
+      .union([
+        z
+          .object({
+            name: z.string().optional(),
+          })
+          .passthrough(),
+        z.string().transform((name) => ({ name })),
+      ])
+      .transform((v) => (typeof v === 'string' ? { name: v } : v));
 
     const IssueSchema = z
       .object({
