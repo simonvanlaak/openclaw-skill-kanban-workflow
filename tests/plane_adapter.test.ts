@@ -45,7 +45,7 @@ describe('PlaneAdapter', () => {
 
     const snap = await adapter.fetchSnapshot();
 
-    expect((execa as any).mock.calls[0]?.[1]).toEqual(['--format', 'json', 'issues', 'list', '--project', 'proj']);
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['--format', 'json', 'issues', 'list', '-p', 'proj']);
     expect(snap.get('i4')?.stage.toString()).toBe('stage:in-progress');
   });
 
@@ -83,7 +83,7 @@ describe('PlaneAdapter', () => {
     const snap = await adapter.fetchSnapshot();
 
     expect((execa as any).mock.calls[0]?.[0]).toBe('plane');
-    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '--project', 'proj']);
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '-p', 'proj']);
 
     expect(Array.from(snap.keys())).toEqual(['i2']);
     expect(snap.get('i2')?.stage.toString()).toBe('stage:backlog');
@@ -112,7 +112,7 @@ describe('PlaneAdapter', () => {
     const snap = await adapter.fetchSnapshot();
 
     expect((execa as any).mock.calls[0]?.[0]).toBe('plane');
-    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '--project', 'proj']);
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '-p', 'proj']);
 
     expect(snap.get('i3')?.stage.toString()).toBe('stage:in-progress');
   });
@@ -154,29 +154,49 @@ describe('PlaneAdapter', () => {
     ]);
   });
 
-  it('implements addComment via plane comments add', async () => {
-    (execa as any as ExecaMock).mockResolvedValueOnce({ stdout: '{}' });
+  it('implements addComment via Plane comment API', async () => {
+    const oldKey = process.env.PLANE_API_KEY;
+    const oldBase = process.env.PLANE_BASE_URL;
+    process.env.PLANE_API_KEY = 'test-key';
+    process.env.PLANE_BASE_URL = 'https://plane.example';
 
-    const adapter = new PlaneAdapter({
-      workspaceSlug: 'ws',
-      projectId: 'proj',
-      stageMap: {
-        Doing: 'stage:in-progress',
-      },
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => '',
     });
+    vi.stubGlobal('fetch', fetchMock as any);
 
-    await adapter.addComment('i9', 'hello');
+    try {
+      const adapter = new PlaneAdapter({
+        workspaceSlug: 'ws',
+        projectId: 'proj',
+        stageMap: {
+          Doing: 'stage:in-progress',
+        },
+      });
 
-    expect((execa as any).mock.calls[0]?.[1]).toEqual([
-      '-f',
-      'json',
-      'comments',
-      'add',
-      '--project',
-      'proj',
-      '--issue',
-      'i9',
-      'hello',
-    ]);
+      await adapter.addComment('i9', 'hello');
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalledWith(
+        'https://plane.example/api/v1/workspaces/ws/projects/proj/issues/i9/comments/',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'test-key',
+          },
+          body: JSON.stringify({ comment_html: '<p>hello</p>' }),
+        },
+      );
+      expect((execa as any).mock.calls.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      if (oldKey == null) delete process.env.PLANE_API_KEY;
+      else process.env.PLANE_API_KEY = oldKey;
+      if (oldBase == null) delete process.env.PLANE_BASE_URL;
+      else process.env.PLANE_BASE_URL = oldBase;
+    }
   });
 });

@@ -277,16 +277,20 @@ export class PlaneAdapter implements Adapter {
       const snap = await this.fetchSnapshotForProject(projectId, issues);
       let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
 
-      // Hard safety: even if CLI-side --assignee filtering is ignored or unavailable,
-      // only pick items explicitly assigned to me.
+      // Hard safety: if assignee data is present, enforce self-assigned only.
+      // Some Plane list surfaces omit assignees when server-side --assignee is used,
+      // so we avoid dropping all items when assignment info is unavailable.
       if (meId) {
-        backlog = backlog.filter((i) =>
-          (i.assignees ?? []).some((a) => {
-            if (typeof a === 'string') return String(a) === String(meId);
-            const aid = (a as any)?.id;
-            return aid ? String(aid) === String(meId) : false;
-          }),
-        );
+        const hasAnyAssigneeData = backlog.some((i) => (i.assignees ?? []).length > 0);
+        if (hasAnyAssigneeData) {
+          backlog = backlog.filter((i) =>
+            (i.assignees ?? []).some((a) => {
+              if (typeof a === 'string') return String(a) === String(meId);
+              const aid = (a as any)?.id;
+              return aid ? String(aid) === String(meId) : false;
+            }),
+          );
+        }
       }
 
       // Try preserve explicit ordering if we can discover it; otherwise updatedAt desc.
