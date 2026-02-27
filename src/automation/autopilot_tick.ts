@@ -31,6 +31,20 @@ export async function runAutopilotTick(opts: {
   const acquired = await opts.lock.tryAcquireLock(lockPath, opts.now, ttlMs);
   try {
     const inProgressIds = await opts.adapter.listIdsByStage('stage:in-progress');
+    if (inProgressIds.length > 1) {
+      // Hardening: auto-heal WIP drift by keeping one active item and moving
+      // all additional in-progress items back to backlog.
+      const keepId = inProgressIds[0]!;
+      for (const id of inProgressIds.slice(1)) {
+        await opts.adapter.setStage(id, 'stage:backlog');
+      }
+      return {
+        kind: 'in_progress',
+        id: keepId,
+        inProgressIds: [keepId],
+      };
+    }
+
     if (inProgressIds.length > 0) {
       return {
         kind: 'in_progress',
