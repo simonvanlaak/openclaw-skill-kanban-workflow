@@ -207,7 +207,15 @@ export class PlaneAdapter implements Adapter {
       const issues = normalizePlaneIssuesList(issuesRaw);
 
       const snap = await this.fetchSnapshotForProject(projectId, issues);
-      const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+      let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+
+      // Hard safety: even if CLI-side --assignee filtering is ignored or unavailable,
+      // only pick items explicitly assigned to me.
+      if (meId) {
+        backlog = backlog.filter((i) =>
+          (i.assignees ?? []).some((a) => (a.id ? String(a.id) === String(meId) : false)),
+        );
+      }
 
       // Try preserve explicit ordering if we can discover it; otherwise updatedAt desc.
       const orderField = this.orderField ?? discoverPlaneOrderField(issuesRaw);
