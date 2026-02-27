@@ -111,6 +111,31 @@ export class PlaneAdapter implements Adapter {
     return (await this.runJson(['issues', 'get', '--project', projectId, String(id)])) ?? {};
   }
 
+
+  private async postCommentViaApi(projectId: string, id: string, body: string): Promise<void> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane comment API');
+    }
+
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const url = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({ comment_html: `<p>${body}</p>` }),
+    });
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Plane comment API failed: HTTP ${res.status} ${txt}`);
+    }
+  }
+
   private statesCache?: PlaneState[];
 
   private getSingleProjectId(forWhat: string): string {
@@ -357,43 +382,8 @@ export class PlaneAdapter implements Adapter {
     const msg = String(body || '').trim();
     if (!msg) return;
 
-    try {
-      await this.cli.run([
-        ...this.baseArgs,
-        ...this.formatArgs,
-        'comments',
-        'add',
-        '--project',
-        projectId,
-        '--issue',
-        id,
-        msg,
-      ]);
-      return;
-    } catch (err: any) {
-      const text = String(err?.message ?? err ?? '');
-      if (!/405|Method \"POST\" not allowed/i.test(text)) throw err;
-    }
-
-    // Fallback for Plane deployments where comments POST is disabled:
-    // append heartbeat/update text into description so progress is still visible.
-    const issue = await this.getIssueRaw(projectId, String(id));
-    const existing = String(issue?.description ?? issue?.description_html ?? '').trim();
-    const stamp = new Date().toISOString();
-    const line = `[${stamp}] ${msg}`;
-    const next = existing ? `${existing}\n\n${line}` : line;
-
-    await this.cli.run([
-      ...this.baseArgs,
-      ...this.formatArgs,
-      'issues',
-      'update',
-      '--project',
-      projectId,
-      '--description',
-      next,
-      String(id),
-    ]);
+    // Primary path: direct Plane API comments endpoint (avoids CLI 405 behavior).
+    await this.postCommentViaApi(projectId, String(id), msg);
   }
 
   async createInBacklogAndAssignToSelf(input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
