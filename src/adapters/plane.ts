@@ -212,6 +212,8 @@ export class PlaneAdapter implements Adapter {
     const snap = await this.fetchSnapshot();
     return [...snap.values()]
       .filter((i) => i.stage.key === stage)
+      // deterministic order: oldest update first so ongoing work remains primary
+      .sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0))
       .map((i) => i.id);
   }
 
