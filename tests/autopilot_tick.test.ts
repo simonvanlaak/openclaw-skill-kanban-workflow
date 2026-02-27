@@ -17,6 +17,7 @@ describe('autopilot-tick', () => {
       listBacklogIdsInOrder: vi.fn(async () => ['B']),
       getWorkItem: vi.fn(async () => ({ assignees: [{ id: 'me' }] })),
       setStage: vi.fn(async () => undefined),
+      addComment: vi.fn(async () => undefined),
     };
 
     const res = await runAutopilotTick({ adapter, lock, now: new Date('2026-02-26T00:00:00Z') });
@@ -32,6 +33,7 @@ describe('autopilot-tick', () => {
       listBacklogIdsInOrder: vi.fn(async () => ['B', 'C']),
       getWorkItem: vi.fn(async () => ({ assignees: [{ username: 'someone-else' }] })),
       setStage: vi.fn(async () => undefined),
+      addComment: vi.fn(async () => undefined),
     };
 
     const res = await runAutopilotTick({ adapter, lock, now: new Date('2026-02-26T00:00:00Z') });
@@ -51,12 +53,18 @@ describe('autopilot-tick', () => {
         return { assignees: [{ id: 'other' }] };
       }),
       setStage: vi.fn(async () => undefined),
+      addComment: vi.fn(async () => undefined),
     };
 
     const res = await runAutopilotTick({ adapter, lock, now: new Date('2026-02-26T00:00:00Z') });
     expect(res).toEqual({ kind: 'in_progress', id: 'A', inProgressIds: ['A'] });
     expect(adapter.setStage).toHaveBeenCalledTimes(1);
     expect(adapter.setStage).toHaveBeenCalledWith('B', 'stage:backlog');
+    expect(adapter.addComment).toHaveBeenCalledTimes(1);
+    expect(adapter.addComment).toHaveBeenCalledWith(
+      'B',
+      expect.stringContaining('Moved back to Backlog automatically'),
+    );
   });
 
   test('starts the first backlog item when idle', async () => {
@@ -67,6 +75,7 @@ describe('autopilot-tick', () => {
       listBacklogIdsInOrder: vi.fn(async () => ['B', 'C']),
       getWorkItem: vi.fn(async () => ({ assignees: [] })),
       setStage: vi.fn(async () => undefined),
+      addComment: vi.fn(async () => undefined),
     };
 
     const res = await runAutopilotTick({ adapter, lock, now: new Date('2026-02-26T00:00:00Z') });
@@ -82,6 +91,7 @@ describe('autopilot-tick', () => {
       listBacklogIdsInOrder: vi.fn(async () => []),
       getWorkItem: vi.fn(async () => ({ assignees: [] })),
       setStage: vi.fn(async () => undefined),
+      addComment: vi.fn(async () => undefined),
     };
 
     const res = await runAutopilotTick({ adapter, lock, now: new Date('2026-02-26T00:00:00Z') });

@@ -12,6 +12,7 @@ export type AutopilotTickPort = {
   listBacklogIdsInOrder(): Promise<string[]>;
   getWorkItem(id: string): Promise<{ assignees?: Actor[] }>;
   setStage(id: string, stage: StageKey): Promise<void>;
+  addComment(id: string, body: string): Promise<void>;
 };
 
 // Verb adapters already satisfy this shape; keep export for clarity.
@@ -64,6 +65,14 @@ export async function runAutopilotTick(opts: {
       const keepId = ownInProgressIds[0]!;
       for (const id of ownInProgressIds.slice(1)) {
         await opts.adapter.setStage(id, 'stage:backlog');
+        try {
+          await opts.adapter.addComment(
+            id,
+            'Moved back to Backlog automatically: per-user WIP limit allows only one active ticket for this worker.',
+          );
+        } catch {
+          // Do not fail tick when comment posting fails.
+        }
       }
       return {
         kind: 'in_progress',
