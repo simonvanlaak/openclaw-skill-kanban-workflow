@@ -70,11 +70,7 @@ function writeHelp(io: CliIo): void {
       '  kanban-workflow blocked --text "block reason + questions for humans"',
       '  kanban-workflow completed --result "what was done"',
       '',
-      'Legacy low-level commands (still available):',
-      '  kanban-workflow start --id <ticket-id>',
-      '  kanban-workflow update --id <ticket-id> --text "..."',
-      '  kanban-workflow ask --id <ticket-id> --text "..."',
-      '  kanban-workflow complete --id <ticket-id> --summary "..."',
+      'Other:',
       '  kanban-workflow create --title "..." [--body "..."]',
       '',
     ].join('\n'),
@@ -537,23 +533,6 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       return 0;
     }
 
-    if (cmd === 'start') {
-      const id = String(flags.id ?? '');
-      if (!id) throw new Error('start requires --id');
-      await start(adapter, id);
-      writeWhatNext(io, cmd);
-      return 0;
-    }
-
-    if (cmd === 'update') {
-      const id = String(flags.id ?? '');
-      const text = String(flags.text ?? '');
-      if (!id) throw new Error('update requires --id');
-      if (!text) throw new Error('update requires --text');
-      await update(adapter, id, text);
-      writeWhatNext(io, cmd);
-      return 0;
-    }
 
     if (cmd === 'continue') {
       const id = String(flags.id ?? '').trim() || (await loadCurrentAutopilotId()) || '';
@@ -565,32 +544,12 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       return 0;
     }
 
-    if (cmd === 'ask') {
-      const id = String(flags.id ?? '');
-      const text = String(flags.text ?? '');
-      if (!id) throw new Error('ask requires --id');
-      if (!text) throw new Error('ask requires --text');
-      await ask(adapter, id, text);
-      writeWhatNext(io, cmd);
-      return 0;
-    }
-
     if (cmd === 'blocked') {
       const id = String(flags.id ?? '').trim() || (await loadCurrentAutopilotId()) || '';
       const text = String(flags.text ?? '').trim();
       if (!id) throw new Error('blocked requires active ticket context (run autopilot-tick first)');
       if (!text) throw new Error('blocked requires --text');
       await ask(adapter, id, text);
-      writeWhatNext(io, cmd);
-      return 0;
-    }
-
-    if (cmd === 'complete') {
-      const id = String(flags.id ?? '');
-      const summary = String(flags.summary ?? '');
-      if (!id) throw new Error('complete requires --id');
-      if (!summary) throw new Error('complete requires --summary');
-      await complete(adapter, id, summary);
       writeWhatNext(io, cmd);
       return 0;
     }

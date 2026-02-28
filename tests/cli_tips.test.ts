@@ -107,15 +107,6 @@ describe('cli what-next tips', () => {
     expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow autopilot-tick`/);
   });
 
-  it('prints a what-next tip after start', async () => {
-    const { io, cap } = createIo();
-
-    const code = await runCli(['start', '--id', '123'], io);
-
-    expect(code).toBe(0);
-    expect(startVerb).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/What next: prefer `kanban-workflow autopilot-tick` for orchestrated flow/);
-  });
 
   it.each([
     ['show', ['show', '--id', '1']],
