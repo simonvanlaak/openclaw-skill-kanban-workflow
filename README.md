@@ -84,7 +84,11 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
 
 - persists ticket->session state in `.tmp/kwf-session-map.json`
 - reuses the same OpenClaw session while the same ticket stays `in_progress`
-- on `blocked`/`completed`, finalizes the old ticket session and starts a fresh session for the next ticket
+- when a ticket is actionable (`started`/`in_progress`, or the next ticket after `blocked`/`completed`), dispatches a **do-work-now** payload into that ticket session
+- the payload includes full ticket context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
+- the payload enforces a strict end-of-turn contract: exactly one of `kanban-workflow continue --text ...`, `kanban-workflow blocked --text ...`, or `kanban-workflow completed --result ...`
+- on `blocked`/`completed`, finalizes the old ticket session and starts/reuses the mapped session for the next ticket
+- no-work ticks emit no dispatch actions (silent/no-op)
 - recovers safely after restart by loading the persisted map (invalid/missing map falls back to empty state)
 
 `setup --autopilot-install-cron` now installs a minimal cron trigger message:

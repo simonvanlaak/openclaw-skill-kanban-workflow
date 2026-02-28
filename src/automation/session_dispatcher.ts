@@ -22,6 +22,16 @@ export type DispatchAction = {
   text: string;
 };
 
+type TicketContext = {
+  id: string;
+  title?: string;
+  body?: string;
+  url?: string;
+  comments: Array<{ at?: string; author?: string; body?: string; internal?: boolean }>;
+  attachments: Array<{ name?: string; url?: string }>;
+  links: Array<{ id?: string; title?: string; url?: string; relation?: string }>;
+};
+
 export type DispatcherPlan = {
   map: SessionMap;
   actions: DispatchAction[];
@@ -97,6 +107,54 @@ function finalizeTicket(map: SessionMap, ticketId: string, state: 'blocked' | 'c
   return entry;
 }
 
+function extractTicketContext(payload: any, fallbackTicketId: string): TicketContext {
+  const item = payload?.item ?? {};
+  const commentsRaw: any[] = Array.isArray(payload?.comments) ? payload.comments : [];
+  const attachmentsRaw: any[] = Array.isArray(item?.attachments) ? item.attachments : [];
+  const linksRaw: any[] = Array.isArray(item?.linked) ? item.linked : [];
+
+  return {
+    id: String(item?.id ?? fallbackTicketId),
+    title: item?.title ? String(item.title) : undefined,
+    body: item?.body ? String(item.body) : undefined,
+    url: item?.url ? String(item.url) : undefined,
+    comments: commentsRaw.map((c) => ({
+      at: c?.createdAt ? String(c.createdAt) : undefined,
+      author: c?.author ? String(c.author) : undefined,
+      body: c?.body ? String(c.body) : undefined,
+      internal: typeof c?.internal === 'boolean' ? c.internal : undefined,
+    })),
+    attachments: attachmentsRaw.map((a) => ({
+      name: a?.name ? String(a.name) : undefined,
+      url: a?.url ? String(a.url) : undefined,
+    })),
+    links: linksRaw.map((l) => ({
+      id: l?.id ? String(l.id) : undefined,
+      title: l?.title ? String(l.title) : undefined,
+      url: l?.url ? String(l.url) : undefined,
+      relation: l?.relation ? String(l.relation) : undefined,
+    })),
+  };
+}
+
+function buildWorkInstruction(ticketId: string, payload: any): string {
+  const context = extractTicketContext(payload, ticketId);
+  const contextJson = JSON.stringify(context, null, 2);
+
+  return [
+    `DO WORK NOW on ticket ${ticketId}.`,
+    'Use the context JSON below as the single source of truth for this turn.',
+    '',
+    'You must end this turn with exactly one command:',
+    '- kanban-workflow continue --text "<status update + next steps>"',
+    '- kanban-workflow blocked --text "<blocker reason + concrete ask>"',
+    '- kanban-workflow completed --result "<what was finished>"',
+    '',
+    'CONTEXT_JSON',
+    contextJson,
+  ].join('\n');
+}
+
 export function buildDispatcherPlan(params: {
   autopilotOutput: any;
   previousMap: SessionMap;
@@ -110,6 +168,7 @@ export function buildDispatcherPlan(params: {
   const tick = output.tick ?? output;
   const tickKind = tick?.kind;
   const currentTicketId: string | undefined = tickKind === 'started' || tickKind === 'in_progress' ? tick?.id : undefined;
+  const activeTicketPayload = output?.nextTicket;
   const nextTicketId: string | undefined = output?.nextTicket?.item?.id;
 
   const actions: DispatchAction[] = [];
@@ -131,7 +190,7 @@ export function buildDispatcherPlan(params: {
         kind: 'work',
         sessionId,
         ticketId: nextTicketId,
-        text: `Autopilot selected ticket ${nextTicketId}. Continue implementation on this ticket now.`,
+        text: buildWorkInstruction(nextTicketId, output?.nextTicket),
       });
       return { map, actions, activeTicketId: nextTicketId };
     }
@@ -145,7 +204,7 @@ export function buildDispatcherPlan(params: {
       kind: 'work',
       sessionId,
       ticketId: currentTicketId,
-      text: `Autopilot confirms active ticket ${currentTicketId}. Continue implementation on this ticket now.`,
+      text: buildWorkInstruction(currentTicketId, activeTicketPayload),
     });
     return { map, actions, activeTicketId: currentTicketId };
   }

@@ -104,6 +104,16 @@ CLI entry point:
 Autopilot flags:
 - `kanban-workflow autopilot-tick --dry-run`
 
+Cron dispatcher behavior (`kanban-workflow cron-dispatch`):
+- maintains per-ticket session mapping in `.tmp/kwf-session-map.json`
+- dispatches a structured do-work-now payload to the mapped session whenever a ticket is actionable
+- payload includes full ticket context (id/title/body/comments/attachments/links)
+- payload requires the worker to end the turn with exactly one command:
+  - `kanban-workflow continue --text ...`
+  - `kanban-workflow blocked --text ...`
+  - `kanban-workflow completed --result ...`
+- when no work is available, dispatch is silent/no-op
+
 ## CLI ergonomics: "What next" tips
 
 All `kanban-workflow <verb>` commands print a `What next:` tip after execution to guide the canonical flow:
