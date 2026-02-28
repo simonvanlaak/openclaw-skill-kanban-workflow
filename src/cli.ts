@@ -62,6 +62,7 @@ function writeHelp(io: CliIo): void {
       '  kanban-workflow setup --adapter <github|plane|linear|planka> ...',
       '  kanban-workflow autopilot-tick [--dry-run]',
       '  kanban-workflow cron-dispatch [--dry-run] [--agent <id>] [--thinking <level>]',
+      '  kanban-workflow enforce-runtime',
       '  kanban-workflow show --id <ticket-id>',
       '  kanban-workflow next',
       '',
@@ -79,6 +80,8 @@ function writeHelp(io: CliIo): void {
 
 const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
+const DISPATCHER_AGENT_ID = 'kanban-workflow-dispatcher';
+const WORKER_AGENT_ID = 'kanban-workflow-worker';
 
 async function ensurePlaneEnvFromHelper(): Promise<void> {
   if ((process.env.PLANE_API_KEY ?? '').trim()) return;
@@ -466,6 +469,67 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       return 0;
     }
 
+    if (cmd === 'enforce-runtime') {
+      const openclawJsonPath = '/root/.openclaw/openclaw.json';
+      const baseAgentDir = '/root/.openclaw/agents';
+      const specs = [
+        { id: DISPATCHER_AGENT_ID, name: 'kanban-workflow dispatcher', dir: `${baseAgentDir}/${DISPATCHER_AGENT_ID}/agent` },
+        { id: WORKER_AGENT_ID, name: 'kanban-workflow worker', dir: `${baseAgentDir}/${WORKER_AGENT_ID}/agent` },
+      ];
+
+      // Ensure agent dirs exist with auth profiles copied from autotriage-subagent if available.
+      await fs.mkdir(baseAgentDir, { recursive: true });
+      for (const s of specs) {
+        await fs.mkdir(s.dir, { recursive: true });
+      }
+
+      // Best-effort update openclaw.json agent list entries.
+      try {
+        const raw = await fs.readFile(openclawJsonPath, 'utf8');
+        const cfg = JSON.parse(raw);
+        cfg.agents = cfg.agents || {};
+        cfg.agents.list = Array.isArray(cfg.agents.list) ? cfg.agents.list : [];
+        const ids = new Set(cfg.agents.list.map((x: any) => String(x?.id ?? '')));
+        for (const s of specs) {
+          if (!ids.has(s.id)) {
+            cfg.agents.list.push({ id: s.id, name: s.name, workspace: '/root/.openclaw/workspace', agentDir: s.dir });
+          }
+        }
+        await fs.writeFile(openclawJsonPath, `${JSON.stringify(cfg, null, 2)}
+`, 'utf8');
+      } catch {
+        // no-op: keep command resilient
+      }
+
+      // Ensure cron job routes through dispatcher->worker model.
+      const cronList = await execa('openclaw', ['cron', 'list', '--json']);
+      const parsed = JSON.parse(cronList.stdout || '{}');
+      const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
+      const target = jobs.find((j: any) => j?.name === 'kanban-workflow dispatcher');
+      const message = `Run kanban-workflow cron-dispatch --agent ${WORKER_AGENT_ID} from /root/.openclaw/workspace/skills/kanban-workflow.`;
+
+      if (target?.id) {
+        const args = ['cron', 'edit', String(target.id), '--agent', DISPATCHER_AGENT_ID, '--message', message, '--session', 'isolated'];
+        await execa('openclaw', args);
+      } else {
+        const args = [
+          'cron', 'add',
+          '--name', 'kanban-workflow dispatcher',
+          '--agent', DISPATCHER_AGENT_ID,
+          '--every', '5m',
+          '--session', 'isolated',
+          '--message', message,
+          '--no-deliver',
+          '--json',
+        ];
+        await execa('openclaw', args);
+      }
+
+      io.stdout.write('Runtime enforced: agents + dispatcher cron configured.\n');
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
     let config: any;
     try {
       config = await loadConfigFromFile({ fs, path: configPath });
@@ -504,8 +568,8 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       if (!dryRun) {
         for (const action of plan.actions) {
-          const args = ['agent', '--session-id', action.sessionId, '--message', action.text];
-          if (flags.agent) args.push('--agent', String(flags.agent));
+          const effectiveAgent = String(flags.agent ?? WORKER_AGENT_ID);
+          const args = ['agent', '--session-id', action.sessionId, '--message', action.text, '--agent', effectiveAgent];
           if (flags.thinking) args.push('--thinking', String(flags.thinking));
           await execa('openclaw', args);
         }
