@@ -73,14 +73,9 @@ export async function saveSessionMap(map: SessionMap, path = DEFAULT_SESSION_MAP
   await fs.writeFile(path, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
 }
 
-export function makeSessionId(ticketId: string, _now: Date, ticketTitle?: string): string {
-  const cleanId = ticketId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 40);
-  const slug = (ticketTitle ?? '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30);
-  return slug ? `kanban-workflow-worker-${cleanId}-${slug}` : `kanban-workflow-worker-${cleanId}`;
+export function makeSessionId(ticketId: string, _now: Date, _ticketTitle?: string): string {
+  const cleanId = ticketId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64);
+  return `kanban-workflow-worker-${cleanId}`;
 }
 
 export function makeSessionLabel(ticketId: string, ticketTitle?: string): string {
