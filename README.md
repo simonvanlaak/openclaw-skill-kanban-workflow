@@ -107,9 +107,13 @@ Auto-complete only fires on strong markers in recent comments to reduce false po
 
 ### Continuous status updates
 
-While an item is in `stage:in-progress`, Kanban Workflow can post an **automatic progress update comment every 5 minutes**. The helper is exported as:
+Autopilot tick no longer posts boilerplate "continuing work" comments. To reduce noise, status updates are emitted only through explicit worker terminal actions:
 
-- `runProgressAutoUpdates()` (see `src/automation/progress_updates.ts`)
+- `kanban-workflow continue --text "update + next steps"`
+- `kanban-workflow blocked --text "block reason + concrete ask"`
+- `kanban-workflow completed --result "what was done"`
+
+(Advanced helper remains available: `runProgressAutoUpdates()` in `src/automation/progress_updates.ts`, but it is not part of the default cron-dispatch loop.)
 
 ## Security model
 

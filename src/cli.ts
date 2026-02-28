@@ -9,6 +9,7 @@ import { LinearAdapter } from './adapters/linear.js';
 import { PlaneAdapter } from './adapters/plane.js';
 import { PlankaAdapter } from './adapters/planka.js';
 import { runAutopilotTick } from './automation/autopilot_tick.js';
+import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { lockfile } from './automation/lockfile.js';
 import { applyWorkerCommandToSessionMap, buildDispatcherPlan, loadSessionMap, saveSessionMap } from './automation/session_dispatcher.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
@@ -238,6 +239,7 @@ function buildHaltOptions() {
 }
 
 async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> {
+  const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun });
   const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
   let output: any = res;
 
@@ -255,9 +257,12 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
       dryRun,
     };
   } else if (res.kind === 'in_progress') {
+    // Long-term anti-noise policy: do not auto-post boilerplate progress comments from tick.
+    // Progress comments must come from explicit worker outcomes via:
+    // - kanban-workflow continue --text "..."
+    // - kanban-workflow blocked --text "..."
+    // - kanban-workflow completed --result "..."
     if (!dryRun) {
-      const msg = `Progress update (autopilot): continuing work on this ticket. Decision reason: ${res.reasonCode ?? 'active_in_progress'}.`;
-      await update(adapter, res.id, msg);
       await saveCurrentAutopilotId(res.id);
     }
     const current = await show(adapter, res.id);
@@ -320,6 +325,12 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
         };
       }
     }
+  }
+
+  if (output && typeof output === 'object') {
+    output.autoReopen = autoReopen;
+  } else {
+    output = { tick: output, autoReopen, dryRun };
   }
 
   return output;

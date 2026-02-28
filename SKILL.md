@@ -145,8 +145,14 @@ Adapter flags (summary):
 
 ## Continuous status updates
 
-While a task is in `stage:in-progress`, Kanban Workflow can post an automatic progress update comment every 5 minutes.
-Use `runProgressAutoUpdates()` and persist its `state` in your agent/runtime.
+Default dispatcher loop does not emit periodic boilerplate progress comments.
+Progress/status updates should come from explicit worker terminal commands:
+
+- `continue --text ...`
+- `blocked --text ...`
+- `completed --result ...`
+
+`runProgressAutoUpdates()` still exists for advanced/custom usage, but is not enabled by default.
 
 ## Recommended repo layout
 
