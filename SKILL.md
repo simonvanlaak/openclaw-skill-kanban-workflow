@@ -93,8 +93,17 @@ Library entry points:
 - verb-level workflow helpers: `show`, `next`, `start`, `update`, `ask`, `complete`, `create`, `autopilot-tick`
 - automations: `runProgressAutoUpdates()`
 
+`autopilot-tick` is now a decision-and-execution orchestrator with three explicit outcomes:
+- continue/start
+- blocked
+- completed
+
 CLI entry point:
 - `src/cli.ts` (provides `kanban-workflow <verb>`; see README for setup flags)
+
+Autopilot flags:
+- `kanban-workflow autopilot-tick --dry-run`
+- `kanban-workflow autopilot-tick --telemetry-path .tmp/autopilot-decisions.jsonl`
 
 ## CLI ergonomics: "What next" tips
 

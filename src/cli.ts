@@ -321,8 +321,56 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     if (cmd === 'autopilot-tick') {
+      const dryRun = Boolean(flags['dry-run']);
+      const telemetryPath = String(flags['telemetry-path'] ?? '');
       const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
-      io.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+
+      let output: unknown = res;
+
+      if (res.kind === 'started') {
+        if (dryRun) {
+          output = { tick: res, action: 'start', dryRun: true };
+        } else {
+          await start(adapter, res.id);
+          const payload = await show(adapter, res.id);
+          output = { tick: res, action: 'start', current: payload };
+        }
+      } else if (res.kind === 'blocked') {
+        if (dryRun) {
+          output = { tick: res, action: 'ask', dryRun: true };
+        } else {
+          await ask(
+            adapter,
+            res.id,
+            `${res.reason} Last activity is ${res.minutesStale} minutes old. Please resolve dependency, then move back to In Progress.`,
+          );
+          const nextRes = await next(adapter);
+          output = { tick: res, action: 'ask', next: nextRes };
+        }
+      } else if (res.kind === 'completed') {
+        // proof gate: only strong completion signal is allowed for auto-complete branch
+        if (res.reasonCode !== 'completion_signal_strong') {
+          output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed' };
+        } else if (dryRun) {
+          output = { tick: res, action: 'complete', dryRun: true };
+        } else {
+          await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
+          const nextRes = await next(adapter);
+          output = { tick: res, action: 'complete', next: nextRes };
+        }
+      }
+
+      if (telemetryPath) {
+        const row = {
+          ts: new Date().toISOString(),
+          cmd,
+          dryRun,
+          output,
+        };
+        await fs.appendFile(telemetryPath, `${JSON.stringify(row)}\n`, 'utf8');
+      }
+
+      io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
       writeWhatNext(io, cmd);
       return 0;
     }

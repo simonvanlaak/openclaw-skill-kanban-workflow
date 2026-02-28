@@ -1,18 +1,30 @@
 import type { Actor } from '../core/ports.js';
 import type { StageKey } from '../stage.js';
 
-export type AutopilotTickResult =
-  | { kind: 'no_work' }
-  | { kind: 'in_progress'; id: string; inProgressIds: string[] }
-  | { kind: 'started'; id: string };
+export type AutopilotEvidence = {
+  updatedAt?: string;
+  minutesStale?: number;
+  matchedSignal?: string;
+};
 
+export type AutopilotTickResult =
+  | { kind: 'no_work'; reasonCode?: string; evidence?: AutopilotEvidence }
+  | { kind: 'in_progress'; id: string; inProgressIds: string[]; reasonCode?: string; evidence?: AutopilotEvidence }
+  | { kind: 'started'; id: string; reasonCode?: string; evidence?: AutopilotEvidence }
+  | { kind: 'blocked'; id: string; minutesStale: number; reason: string; reasonCode: string; evidence?: AutopilotEvidence }
+  | { kind: 'completed'; id: string; reason: string; reasonCode: string; evidence?: AutopilotEvidence };
 export type AutopilotTickPort = {
   whoami(): Promise<Actor>;
   listIdsByStage(stage: StageKey): Promise<string[]>;
   listBacklogIdsInOrder(): Promise<string[]>;
-  getWorkItem(id: string): Promise<{ assignees?: Actor[] }>;
+  getWorkItem(id: string): Promise<{ title?: string; assignees?: Actor[]; updatedAt?: Date }>;
+  listComments?(
+    id: string,
+    opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+  ): Promise<Array<{ body: string; createdAt?: Date }>>;
   setStage(id: string, stage: StageKey): Promise<void>;
   addComment(id: string, body: string): Promise<void>;
+  reconcileAssignments?(): Promise<void>;
 };
 
 // Verb adapters already satisfy this shape; keep export for clarity.
@@ -37,6 +49,43 @@ function isAssignedToSelf(assignees: readonly Actor[] | undefined, me: Actor): b
   return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
 }
 
+const STALE_MINUTES_FOR_BLOCK = 10;
+const COMPLETION_PROOF_MARKERS = [
+  'completed:',
+  '[done-proof]',
+  'proof:',
+];
+const BLOCKER_KEYWORDS = [
+  'permission denied',
+  'access denied',
+  'connection refused',
+  'timed out',
+  'timeout',
+  'lookup failed',
+  'dns',
+  'missing credential',
+  'waiting on',
+  'blocked',
+  'cannot proceed',
+];
+
+function isStale(updatedAt: Date | undefined, now: Date, thresholdMinutes: number): number {
+  if (!updatedAt) return 0;
+  const minutes = Math.floor((now.getTime() - updatedAt.getTime()) / 60000);
+  return minutes >= thresholdMinutes ? minutes : 0;
+}
+
+function hasBlockerSignal(text: string): boolean {
+  const v = text.toLowerCase();
+  return BLOCKER_KEYWORDS.some((k) => v.includes(k));
+}
+
+function completionMarker(text: string): string | null {
+  const v = text.toLowerCase();
+  const m = COMPLETION_PROOF_MARKERS.find((k) => v.includes(k));
+  return m ?? null;
+}
+
 export async function runAutopilotTick(opts: {
   adapter: AutopilotTickPort;
   lock: AutopilotLockPort;
@@ -49,6 +98,10 @@ export async function runAutopilotTick(opts: {
 
   const acquired = await opts.lock.tryAcquireLock(lockPath, opts.now, ttlMs);
   try {
+    if (typeof opts.adapter.reconcileAssignments === 'function') {
+      await opts.adapter.reconcileAssignments();
+    }
+
     const me = await opts.adapter.whoami();
     const inProgressIds = await opts.adapter.listIdsByStage('stage:in-progress');
 
@@ -64,6 +117,12 @@ export async function runAutopilotTick(opts: {
       // Auto-heal only my own WIP drift, keep deterministic primary item (first in adapter order).
       const keepId = ownInProgressIds[0]!;
       for (const id of ownInProgressIds.slice(1)) {
+        // Defensive re-check right before mutating state.
+        const latest = await opts.adapter.getWorkItem(id);
+        if (!isAssignedToSelf(latest.assignees, me)) {
+          continue;
+        }
+
         await opts.adapter.setStage(id, 'stage:backlog');
         try {
           await opts.adapter.addComment(
@@ -82,19 +141,81 @@ export async function runAutopilotTick(opts: {
     }
 
     if (ownInProgressIds.length > 0) {
+      const activeId = ownInProgressIds[0]!;
+      const active = await opts.adapter.getWorkItem(activeId);
+      const minutesStale = isStale(active.updatedAt, opts.now, STALE_MINUTES_FOR_BLOCK);
+
+      if (typeof opts.adapter.listComments === 'function') {
+        const recentComments = await opts.adapter.listComments(activeId, {
+          limit: 5,
+          newestFirst: true,
+          includeInternal: true,
+        });
+
+        // Completion decision: if recent updates include a clear completion signal,
+        // advance to In Review and stop active execution.
+        const completion = recentComments
+          .map((c) => ({ c, marker: completionMarker(c.body ?? '') }))
+          .find((x) => Boolean(x.marker));
+        if (completion) {
+          const reason = 'Auto-completed: detected completion proof marker in recent updates.';
+          return {
+            kind: 'completed',
+            id: activeId,
+            reason,
+            reasonCode: 'completion_signal_strong',
+            evidence: {
+              updatedAt: active.updatedAt?.toISOString(),
+              minutesStale,
+              matchedSignal: completion.marker ?? undefined,
+            },
+          };
+        }
+
+        // Blocked decision: stale ticket + blocker signal in recent comments.
+        if (minutesStale > 0) {
+          const blocker = recentComments.find((c) => hasBlockerSignal(c.body ?? ''));
+          if (blocker) {
+            const reason = 'Auto-blocked: stale in-progress item with blocker signal in recent updates.';
+            return {
+              kind: 'blocked',
+              id: activeId,
+              minutesStale,
+              reason,
+              reasonCode: 'stale_with_blocker_signal',
+              evidence: {
+                updatedAt: active.updatedAt?.toISOString(),
+                minutesStale,
+                matchedSignal: BLOCKER_KEYWORDS.find((k) => (blocker.body ?? '').toLowerCase().includes(k)),
+              },
+            };
+          }
+        }
+      }
+
       return {
         kind: 'in_progress',
-        id: ownInProgressIds[0]!,
+        id: activeId,
         inProgressIds: ownInProgressIds,
       };
     }
 
     const backlogOrderedIds = await opts.adapter.listBacklogIdsInOrder();
     const nextId = backlogOrderedIds[0];
-    if (!nextId) return { kind: 'no_work' };
+    if (!nextId) return { kind: 'no_work', reasonCode: 'no_backlog_assigned' };
 
-    await opts.adapter.setStage(nextId, 'stage:in-progress');
-    return { kind: 'started', id: nextId };
+    // Hard assignment gate: never start work on tickets not explicitly assigned to me.
+    const nextItem = await opts.adapter.getWorkItem(nextId);
+    if (!isAssignedToSelf(nextItem.assignees, me)) {
+      return { kind: 'no_work', reasonCode: 'next_not_assigned_to_me' };
+    }
+
+    return {
+      kind: 'started',
+      id: nextId,
+      reasonCode: 'start_next_assigned_backlog',
+      evidence: { updatedAt: nextItem.updatedAt?.toISOString() },
+    };
   } finally {
     await acquired.release();
   }

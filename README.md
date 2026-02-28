@@ -2,6 +2,8 @@
 
 A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-first adapters** (external CLIs or wrapper scripts; some use API keys via env vars). It also includes an `autopilot-tick` command intended to be run on a schedule (e.g. OpenClaw cron). Setup can optionally install that cron job.
 
+`autopilot-tick` is now an execution orchestrator, not just a detector: each run decides and executes one path (continue/start, blocked, completed).
+
 ## What it is
 
 Kanban Workflow standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
@@ -60,6 +62,30 @@ Adapter flags:
 - Plane: `--plane-workspace-slug <slug>`, `--plane-project-id <uuid>`, optional `--plane-order-field <field>`
 - Linear: scope `--linear-team-id <id>` **or** `--linear-project-id <id>`, optional ordering `--linear-view-id <id>`
 - Planka: `--planka-board-id <id>`, `--planka-backlog-list-id <id>`
+
+### Autopilot decision model (single command)
+
+`autopilot-tick` now decides and executes one of three outcomes per run:
+
+- **continue/start**
+  - if no active work exists and next backlog item is assigned to self, it starts it and returns current payload.
+- **blocked**
+  - if active work is stale and blocker evidence exists, it moves the ticket to Blocked (`ask`) and automatically loads `next`.
+- **completed**
+  - if strong completion proof marker exists, it completes the ticket (`complete` -> In Review) and automatically loads `next`.
+
+Supported flags:
+
+- `--dry-run` -> evaluate decision without mutating ticket state
+- `--telemetry-path <file.jsonl>` -> append decision/output records for auditing
+
+### Completion proof gate
+
+Auto-complete only fires on strong markers in recent comments to reduce false positives, e.g.:
+
+- `Completed:`
+- `[done-proof]`
+- `proof:`
 
 ### Continuous status updates
 
