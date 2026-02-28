@@ -157,33 +157,83 @@ export function applyWorkerCommandToSessionMap(
   return map;
 }
 
+function normalizeCommentAuthor(author: unknown): string | undefined {
+  if (author == null) return undefined;
+  if (typeof author === 'string') return author;
+
+  if (typeof author === 'object') {
+    const a = author as Record<string, unknown>;
+    const candidates = [a.display_name, a.displayName, a.name, a.username, a.email, a.id];
+    for (const c of candidates) {
+      if (typeof c === 'string' && c.trim()) return c.trim();
+    }
+
+    const nested = a.member;
+    if (nested && typeof nested === 'object') {
+      const n = nested as Record<string, unknown>;
+      const nestedCandidates = [n.display_name, n.displayName, n.name, n.username, n.email, n.id];
+      for (const c of nestedCandidates) {
+        if (typeof c === 'string' && c.trim()) return c.trim();
+      }
+    }
+
+    return JSON.stringify(a);
+  }
+
+  return String(author);
+}
+
+function extractIssueKeyLinks(text: string | undefined): Array<{ title: string; relation: string }> {
+  if (!text) return [];
+  const matches = text.match(/\b[A-Z][A-Z0-9]+-\d+\b/g) ?? [];
+  const unique = [...new Set(matches)];
+  return unique.map((k) => ({ title: k, relation: 'mentioned' }));
+}
+
 function extractTicketContext(payload: any, fallbackTicketId: string): TicketContext {
   const item = payload?.item ?? {};
   const commentsRaw: any[] = Array.isArray(payload?.comments) ? payload.comments : [];
   const attachmentsRaw: any[] = Array.isArray(item?.attachments) ? item.attachments : [];
   const linksRaw: any[] = Array.isArray(item?.linked) ? item.linked : [];
 
+  const comments = commentsRaw.map((c) => ({
+    at: c?.createdAt ? String(c.createdAt) : undefined,
+    author: normalizeCommentAuthor(c?.author),
+    body: c?.body ? String(c.body) : undefined,
+    internal: typeof c?.internal === 'boolean' ? c.internal : undefined,
+  }));
+
+  const explicitLinks = linksRaw.map((l) => ({
+    id: l?.id ? String(l.id) : undefined,
+    title: l?.title ? String(l.title) : undefined,
+    url: l?.url ? String(l.url) : undefined,
+    relation: l?.relation ? String(l.relation) : undefined,
+  }));
+
+  const inferredFromBody = extractIssueKeyLinks(item?.body ? String(item.body) : undefined);
+  const inferredFromComments = comments.flatMap((c) => extractIssueKeyLinks(c.body));
+  const inferred = [...inferredFromBody, ...inferredFromComments];
+
+  const seen = new Set<string>();
+  const mergedLinks = [...explicitLinks, ...inferred]
+    .filter((l) => {
+      const key = `${l.title ?? ''}|${l.url ?? ''}|${l.relation ?? ''}`;
+      if (!key.trim() || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
   return {
     id: String(item?.id ?? fallbackTicketId),
     title: item?.title ? String(item.title) : undefined,
     body: item?.body ? String(item.body) : undefined,
     url: item?.url ? String(item.url) : undefined,
-    comments: commentsRaw.map((c) => ({
-      at: c?.createdAt ? String(c.createdAt) : undefined,
-      author: c?.author ? String(c.author) : undefined,
-      body: c?.body ? String(c.body) : undefined,
-      internal: typeof c?.internal === 'boolean' ? c.internal : undefined,
-    })),
+    comments,
     attachments: attachmentsRaw.map((a) => ({
       name: a?.name ? String(a.name) : undefined,
       url: a?.url ? String(a.url) : undefined,
     })),
-    links: linksRaw.map((l) => ({
-      id: l?.id ? String(l.id) : undefined,
-      title: l?.title ? String(l.title) : undefined,
-      url: l?.url ? String(l.url) : undefined,
-      relation: l?.relation ? String(l.relation) : undefined,
-    })),
+    links: mergedLinks,
   };
 }
 
