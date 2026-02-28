@@ -46,7 +46,7 @@ describe('setup', () => {
             kind: 'github',
             repo: 'o/r',
             stageMap: {
-              'stage:backlog': 'stage:backlog',
+              'stage:todo': 'stage:todo',
               'stage:blocked': 'stage:blocked',
               'stage:in-progress': 'stage:in-progress',
               'stage:in-review': 'stage:in-review',
@@ -77,7 +77,7 @@ describe('setup', () => {
             kind: 'github',
             repo: 'o/r',
             stageMap: {
-              'stage:backlog': 'stage:backlog',
+              'stage:todo': 'stage:todo',
               'stage:blocked': 'stage:blocked',
               'stage:in-progress': 'stage:in-progress',
               'stage:in-review': 'stage:in-review',
@@ -105,7 +105,7 @@ describe('setup', () => {
           kind: 'github',
           repo: 'o/r',
           stageMap: {
-            'stage:backlog': 'stage:backlog',
+            'stage:todo': 'stage:todo',
             'stage:blocked': 'stage:blocked',
             'stage:in-progress': 'stage:in-progress',
             'stage:in-review': 'stage:in-review',

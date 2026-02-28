@@ -24,6 +24,8 @@ export const ClawbanConfigV1Schema = z.object({
       cronExpr: z.string().min(1).default('*/5 * * * *'),
       /** Optional timezone for cron evaluation (e.g. Europe/Berlin). */
       tz: z.string().min(1).optional(),
+      /** Stage key used when human comments should requeue Blocked/In Review work. */
+      requeueTargetStage: StageKeySchema.default('stage:todo'),
     })
     .optional(),
   adapter: z.discriminatedUnion('kind', [

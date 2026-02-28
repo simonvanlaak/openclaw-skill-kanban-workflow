@@ -33,6 +33,10 @@ vi.mock('../src/automation/autopilot_tick.js', () => ({
   runAutopilotTick: vi.fn(),
 }));
 
+vi.mock('../src/automation/auto_reopen.js', () => ({
+  runAutoReopenOnHumanComment: vi.fn(async () => ({ actions: [] })),
+}));
+
 vi.mock('../src/verbs/verbs.js', () => ({
   show: vi.fn(async (_adapter: unknown, id: string) => ({ item: { id, title: 'T' } })),
   next: vi.fn(async () => ({ kind: 'item', item: { id: 'N1', title: 'Next' } })),
@@ -168,6 +172,7 @@ describe('autopilot CLI simplified contract', () => {
       action: 'hold',
       reason: 'completion_proof_gate_failed',
       dryRun: false,
+      autoReopen: { actions: [] },
     });
   });
 });

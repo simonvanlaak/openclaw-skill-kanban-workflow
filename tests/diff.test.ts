@@ -26,7 +26,7 @@ describe('diffWorkItems', () => {
       {
         type: 'StageChanged',
         workItemId: 'b',
-        old: { key: 'stage:backlog' },
+        old: { key: 'stage:todo' },
         new: { key: 'stage:in-progress' },
       },
       { type: 'WorkItemUpdated', workItemId: 'd' },

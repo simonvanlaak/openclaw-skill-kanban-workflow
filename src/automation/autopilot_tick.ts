@@ -123,7 +123,7 @@ export async function runAutopilotTick(opts: {
           continue;
         }
 
-        await opts.adapter.setStage(id, 'stage:backlog');
+        await opts.adapter.setStage(id, 'stage:todo');
         try {
           await opts.adapter.addComment(
             id,

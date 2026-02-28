@@ -111,7 +111,7 @@ export class LinearAdapter implements Adapter {
   async listBacklogIdsInOrder(): Promise<string[]> {
     const snap = await this.fetchSnapshot();
 
-    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:todo');
     // Assume CLI provides an explicit order; fallback to updatedAt desc when missing.
     const hasAllUpdated = backlog.every((i) => i.updatedAt instanceof Date);
 

@@ -10,7 +10,7 @@
 
 ### Goals
 - **Canonical stage lifecycle** as the shared state machine:
-  - `stage:backlog`, `stage:queued`, `stage:needs-clarification`, `stage:ready-to-implement`, `stage:in-progress`, `stage:in-review`, `stage:blocked`, plus platform-specific done/closed.
+  - `stage:todo`, `stage:queued`, `stage:needs-clarification`, `stage:ready-to-implement`, `stage:in-progress`, `stage:in-review`, `stage:blocked`, plus platform-specific done/closed.
 - **Ports & adapters** architecture: core holds rules and state; adapters translate between core model and platform specifics.
 - **Deterministic tick**: same inputs + same config/state ⇒ same decisions.
 - **Idempotent actions**: safe re-runs; dedupe on action keys.

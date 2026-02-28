@@ -232,7 +232,7 @@ export class GitHubAdapter implements Adapter {
     const all = await this.listOpenIssuesWithStageLabels({ limit: 200 });
     const backlog = all.filter((i) => {
       const platform = this.pickPlatformStage(i.labels);
-      return platform ? this.stageMap[platform] === 'stage:backlog' : false;
+      return platform ? this.stageMap[platform] === 'stage:todo' : false;
     });
 
     const byUpdatedDesc = [...backlog].sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
@@ -394,9 +394,9 @@ export class GitHubAdapter implements Adapter {
       throw new Error('Unable to self-assign: gh whoami did not return username');
     }
 
-    const backlogLabel = this.platformStagesFor('stage:backlog')[0];
+    const backlogLabel = this.platformStagesFor('stage:todo')[0];
     if (!backlogLabel) {
-      throw new Error('Unable to create in backlog: no platform stage mapped to stage:backlog');
+      throw new Error('Unable to create in backlog: no platform stage mapped to stage:todo');
     }
 
     const out = await this.gh.run([

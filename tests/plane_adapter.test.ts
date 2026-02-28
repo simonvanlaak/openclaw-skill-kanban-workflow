@@ -62,8 +62,8 @@ describe('PlaneAdapter', () => {
           name: 'Queued',
           url: 'https://plane.example/issues/i2',
           updated_at: '2026-02-26T08:31:00Z',
-          state: { name: 'stage:backlog' },
-          labels: [{ name: 'bug' }, { name: 'stage:backlog' }]
+          state: { name: 'stage:todo' },
+          labels: [{ name: 'bug' }, { name: 'stage:todo' }]
         }
       ])
     });
@@ -73,7 +73,7 @@ describe('PlaneAdapter', () => {
       projectId: 'proj',
       bin: 'plane',
       stageMap: {
-        'stage:backlog': 'stage:backlog',
+        'stage:todo': 'stage:todo',
         'stage:blocked': 'stage:blocked',
         'stage:in-progress': 'stage:in-progress',
         'stage:in-review': 'stage:in-review',
@@ -86,8 +86,8 @@ describe('PlaneAdapter', () => {
     expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '-p', 'proj']);
 
     expect(Array.from(snap.keys())).toEqual(['i2']);
-    expect(snap.get('i2')?.stage.toString()).toBe('stage:backlog');
-    expect(snap.get('i2')?.labels).toEqual(['bug', 'stage:backlog']);
+    expect(snap.get('i2')?.stage.toString()).toBe('stage:todo');
+    expect(snap.get('i2')?.labels).toEqual(['bug', 'stage:todo']);
   });
 
   it('supports mapping non-canonical Plane state names via stageMap', async () => {
@@ -138,7 +138,7 @@ describe('PlaneAdapter', () => {
       workspaceSlug: 'ws',
       projectId: 'proj',
       stageMap: {
-        Todo: 'stage:backlog',
+        Todo: 'stage:todo',
         'In Progress': 'stage:in-progress',
       },
     });
@@ -190,7 +190,7 @@ describe('PlaneAdapter', () => {
       workspaceSlug: 'ws',
       projectId: 'proj',
       stageMap: {
-        Todo: 'stage:backlog',
+        Todo: 'stage:todo',
       },
     });
 
@@ -219,14 +219,14 @@ describe('PlaneAdapter', () => {
           {
             id: 'i-low',
             name: 'Low priority but newer',
-            state: { name: 'stage:backlog' },
+            state: { name: 'stage:todo' },
             priority: 'low',
             updated_at: '2026-02-27T12:00:00Z',
           },
           {
             id: 'i-high',
             name: 'High priority but older',
-            state: { name: 'stage:backlog' },
+            state: { name: 'stage:todo' },
             priority: 'high',
             updated_at: '2026-02-27T10:00:00Z',
           },
@@ -237,7 +237,7 @@ describe('PlaneAdapter', () => {
       workspaceSlug: 'ws',
       projectId: 'proj',
       stageMap: {
-        'stage:backlog': 'stage:backlog',
+        'stage:todo': 'stage:todo',
         'stage:blocked': 'stage:blocked',
         'stage:in-progress': 'stage:in-progress',
         'stage:in-review': 'stage:in-review',
@@ -266,7 +266,7 @@ describe('PlaneAdapter', () => {
       projectId: 'proj',
       stageMap: {
         Doing: 'stage:in-progress',
-        Backlog: 'stage:backlog',
+        Backlog: 'stage:todo',
       },
     });
 
@@ -311,7 +311,7 @@ describe('PlaneAdapter', () => {
       workspaceSlug: 'ws',
       projectId: 'proj',
       stageMap: {
-        Todo: 'stage:backlog',
+        Todo: 'stage:todo',
       },
     });
 
@@ -344,7 +344,7 @@ describe('PlaneAdapter', () => {
       workspaceSlug: 'ws',
       projectId: 'proj',
       stageMap: {
-        Todo: 'stage:backlog',
+        Todo: 'stage:todo',
       },
     });
 

@@ -27,13 +27,13 @@ describe('PlaneAdapter (multi-project)', () => {
       // project A issues list
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
-          { id: 'A1', name: 'A1', state: { name: 'stage:backlog' }, updated_at: '2026-02-26T00:00:00Z' },
+          { id: 'A1', name: 'A1', state: { name: 'stage:todo' }, updated_at: '2026-02-26T00:00:00Z' },
         ]),
       })
       // project B issues list
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
-          { id: 'B1', name: 'B1', state: { name: 'stage:backlog' }, updated_at: '2026-02-26T00:00:01Z' },
+          { id: 'B1', name: 'B1', state: { name: 'stage:todo' }, updated_at: '2026-02-26T00:00:01Z' },
         ]),
       });
 
@@ -41,7 +41,7 @@ describe('PlaneAdapter (multi-project)', () => {
       workspaceSlug: 'ws',
       projectIds: ['projA', 'projB'],
       stageMap: {
-        'stage:backlog': 'stage:backlog',
+        'stage:todo': 'stage:todo',
         'stage:blocked': 'stage:blocked',
         'stage:in-progress': 'stage:in-progress',
         'stage:in-review': 'stage:in-review',

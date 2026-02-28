@@ -5,6 +5,11 @@ import { z } from 'zod';
 
 import { Stage } from '../stage.js';
 
+function parsePlaneDate(v: string): Date | undefined {
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
 function normalizePlaneIssuesList(raw: unknown): any[] {
   if (Array.isArray(raw)) return raw;
   if (raw && typeof raw === 'object') {
@@ -470,7 +475,7 @@ export class PlaneAdapter implements Adapter {
       const issues = normalizePlaneIssuesList(issuesRaw);
 
       const snap = await this.fetchSnapshotForProject(projectId, issues);
-      let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+      let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:todo');
 
       // Hard safety: if assignee data is present, enforce self-assigned only.
       // Some Plane list surfaces omit assignees when server-side --assignee is used,
@@ -577,21 +582,42 @@ export class PlaneAdapter implements Adapter {
   async listComments(
     id: string,
     opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
-  ): Promise<Array<{ id: string; body: string }>> {
+  ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { id?: string; username?: string; name?: string } }>> {
     const projectId = this.getSingleProjectId('listComments');
     const raw = await this.listCommentsViaApi(projectId, id);
 
     const mapped = raw
-      .map((c: any) => ({
-        id: String(c?.id ?? ''),
-        body: this.stripHtml(String(c?.comment_html ?? c?.comment ?? c?.body ?? '')),
-        createdAt: String(c?.created_at ?? ''),
-      }))
+      .map((c: any) => {
+        const actor = c?.actor_detail ?? c?.actor ?? c?.created_by_detail ?? c?.created_by;
+        const actorId = typeof actor === 'string' ? actor : actor?.id;
+        const actorUsername = typeof actor === 'string' ? undefined : (actor?.display_name ?? actor?.email ?? actor?.username);
+        const actorName = typeof actor === 'string' ? undefined : (actor?.first_name || actor?.last_name)
+          ? `${String(actor?.first_name ?? '').trim()} ${String(actor?.last_name ?? '').trim()}`.trim()
+          : actor?.display_name;
+
+        return {
+          id: String(c?.id ?? ''),
+          body: this.stripHtml(String(c?.comment_html ?? c?.comment ?? c?.body ?? '')),
+          createdAt: c?.created_at ? parsePlaneDate(String(c.created_at)) : undefined,
+          author:
+            actorId || actorUsername || actorName
+              ? {
+                  id: actorId ? String(actorId) : undefined,
+                  username: actorUsername ? String(actorUsername) : undefined,
+                  name: actorName ? String(actorName) : undefined,
+                }
+              : undefined,
+        };
+      })
       .filter((c) => c.id && c.body);
 
-    mapped.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)); // newest first
+    mapped.sort((a, b) => {
+      const at = a.createdAt ? a.createdAt.getTime() : 0;
+      const bt = b.createdAt ? b.createdAt.getTime() : 0;
+      return bt - at;
+    });
     const ordered = opts.newestFirst ? mapped : [...mapped].reverse();
-    return ordered.slice(0, Math.max(1, opts.limit)).map(({ id, body }) => ({ id, body }));
+    return ordered.slice(0, Math.max(1, opts.limit));
   }
 
   async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
@@ -629,7 +655,7 @@ export class PlaneAdapter implements Adapter {
 
   async createInBacklogAndAssignToSelf(input: { title: string; body: string }): Promise<{ id: string; url?: string }> {
     const projectId = this.getSingleProjectId('create');
-    const backlogStateId = await this.resolveStateIdForStage('stage:backlog');
+    const backlogStateId = await this.resolveStateIdForStage('stage:todo');
 
     const created = (await this.runJson([
       'issues',

@@ -51,7 +51,7 @@ Provide a reusable core for a project-management “co-worker” that:
 
 Treat these labels/states as canonical (and the **only** stages the agent should consider):
 
-- `stage:backlog`
+- `stage:todo`
 - `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`

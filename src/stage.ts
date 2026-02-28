@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 export const CANONICAL_STAGE_KEYS = [
-  'stage:backlog',
+  'stage:todo',
   'stage:blocked',
   'stage:in-progress',
   'stage:in-review',
@@ -31,9 +31,13 @@ export class Stage {
     const trimmed = value.trim();
     const lower = trimmed.toLowerCase();
 
+    let normalized = slug(trimmed);
+    // Backward-compat alias: old canonical stage key was stage:backlog.
+    if (normalized === 'backlog') normalized = 'todo';
+
     const key = lower.startsWith('stage:') || lower.startsWith('stage/')
-      ? (`stage:${slug(trimmed)}` as const)
-      : (`stage:${slug(trimmed)}` as const);
+      ? (`stage:${normalized}` as const)
+      : (`stage:${normalized}` as const);
 
     const parsed = StageKeySchema.safeParse(key);
     if (!parsed.success) {

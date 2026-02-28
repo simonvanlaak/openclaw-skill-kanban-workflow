@@ -61,7 +61,7 @@ export class PlankaAdapter implements Adapter {
 
   async listBacklogIdsInOrder(): Promise<string[]> {
     const snap = await this.fetchSnapshot();
-    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
+    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:todo');
 
     // Planka card position is the explicit order; assume CLI returns cards in that order.
     return backlog.map((i) => i.id);

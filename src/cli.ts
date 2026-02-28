@@ -137,7 +137,7 @@ function buildHaltOptions() {
   };
 }
 
-async function runAutopilotCommand(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:backlog'): Promise<any> {
+async function runAutopilotCommand(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:todo'): Promise<any> {
   const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun, requeueTargetStage });
   const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
   let output: any = res;
@@ -295,7 +295,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       }
 
       const stageMap: Record<string, string> = {
-        [mapBacklog]: 'stage:backlog',
+        [mapBacklog]: 'stage:todo',
         [mapBlocked]: 'stage:blocked',
         [mapInProgress]: 'stage:in-progress',
         [mapInReview]: 'stage:in-review',
@@ -410,9 +410,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       const autopilotCronExpr = String(flags['autopilot-cron-expr'] ?? '*/5 * * * *').trim();
       const autopilotTz = flags['autopilot-cron-tz'] ? String(flags['autopilot-cron-tz']).trim() : undefined;
-      const autopilotRequeueTargetStage = String(flags['autopilot-requeue-target-stage'] ?? 'stage:backlog').trim();
-      if (!['stage:backlog', 'stage:blocked', 'stage:in-progress', 'stage:in-review'].includes(autopilotRequeueTargetStage)) {
-        throw new Error('setup --autopilot-requeue-target-stage must be one of: stage:backlog, stage:blocked, stage:in-progress, stage:in-review');
+      const autopilotRequeueTargetStage = String(flags['autopilot-requeue-target-stage'] ?? 'stage:todo').trim();
+      if (!['stage:todo', 'stage:blocked', 'stage:in-progress', 'stage:in-review'].includes(autopilotRequeueTargetStage)) {
+        throw new Error('setup --autopilot-requeue-target-stage must be one of: stage:todo, stage:blocked, stage:in-progress, stage:in-review');
       }
       const autopilotInstallCron = Boolean(flags['autopilot-install-cron']);
 
@@ -436,14 +436,14 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
           // next prerequisites
           await adapter.listBacklogIdsInOrder();
-          await adapter.listIdsByStage('stage:backlog');
+          await adapter.listIdsByStage('stage:todo');
           await adapter.listIdsByStage('stage:blocked');
           await adapter.listIdsByStage('stage:in-progress');
           await adapter.listIdsByStage('stage:in-review');
 
           // show prerequisites (best-effort: validate on at least one work item if any exist)
           const candidates = [
-            ...(await adapter.listIdsByStage('stage:backlog')),
+            ...(await adapter.listIdsByStage('stage:todo')),
             ...(await adapter.listIdsByStage('stage:blocked')),
             ...(await adapter.listIdsByStage('stage:in-progress')),
             ...(await adapter.listIdsByStage('stage:in-review')),
@@ -572,7 +572,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     const adapter = await adapterFromConfig(config.adapter);
-    const requeueTargetStage = (config?.autopilot?.requeueTargetStage ?? 'stage:backlog') as import('./stage.js').StageKey;
+    const requeueTargetStage = (config?.autopilot?.requeueTargetStage ?? 'stage:todo') as import('./stage.js').StageKey;
 
     if (cmd === 'show') {
       const id = String(flags.id ?? '');

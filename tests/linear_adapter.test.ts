@@ -37,7 +37,7 @@ describe('LinearAdapter', () => {
     const adapter = new LinearAdapter({
       teamId: 'team-123',
       stageMap: {
-        'stage:backlog': 'stage:backlog',
+        'stage:todo': 'stage:todo',
         'stage:blocked': 'stage:blocked',
         'stage:in-progress': 'stage:in-progress',
         'stage:in-review': 'stage:in-review',
@@ -72,7 +72,7 @@ describe('LinearAdapter', () => {
                 title: 'Queued',
                 url: 'https://linear.example/issue/l2',
                 updatedAt: '2026-02-26T08:31:00Z',
-                state: { name: 'stage:backlog' },
+                state: { name: 'stage:todo' },
               },
             ],
           },
@@ -83,7 +83,7 @@ describe('LinearAdapter', () => {
     const adapter = new LinearAdapter({
       teamId: 'team-123',
       stageMap: {
-        'stage:backlog': 'stage:backlog',
+        'stage:todo': 'stage:todo',
         'stage:blocked': 'stage:blocked',
         'stage:in-progress': 'stage:in-progress',
         'stage:in-review': 'stage:in-review',
@@ -93,7 +93,7 @@ describe('LinearAdapter', () => {
     const snap = await adapter.fetchSnapshot();
 
     expect(Array.from(snap.keys())).toEqual(['l2']);
-    expect(snap.get('l2')?.stage.toString()).toBe('stage:backlog');
+    expect(snap.get('l2')?.stage.toString()).toBe('stage:todo');
     expect(snap.get('l2')?.updatedAt?.toISOString()).toBe('2026-02-26T08:31:00.000Z');
   });
 

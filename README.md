@@ -8,7 +8,7 @@ A TypeScript-first core skill for a stage-based “agentic co-worker” that int
 
 Kanban Workflow standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
 
-- `stage:backlog`
+- `stage:todo`
 - `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`

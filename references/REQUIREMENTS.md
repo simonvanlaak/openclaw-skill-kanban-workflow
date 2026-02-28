@@ -14,7 +14,7 @@ This document captures the initial Q&A requirements for Kanban Workflow’s verb
 
 Kanban Workflow’s canonical stages are (and these are the **only** stages the agent should consider):
 
-- `stage:backlog`
+- `stage:todo`
 - `stage:blocked`
 - `stage:in-progress`
 - `stage:in-review`
@@ -134,13 +134,13 @@ Every verb execution must output a **"What next"** tip.
 
 ### 6) `create`
 
-**Goal:** create a new task in `stage:backlog` and automatically assign it to the agent itself.
+**Goal:** create a new task in `stage:todo` and automatically assign it to the agent itself.
 
 - Must create work item in the target platform.
-- Must apply/encode `stage:backlog`.
+- Must apply/encode `stage:todo`.
 - Must assign to the agent identity.
 - Keep `create` minimal for now (no linked-ticket relationships created at creation time).
-- `create` does **not** auto-start; it leaves the task in `stage:backlog`.
+- `create` does **not** auto-start; it leaves the task in `stage:todo`.
 
 ## Not required (explicitly)
 
@@ -167,7 +167,7 @@ Reopening should happen automatically when a human comments on a task that is:
 - `stage:in-review`
 
 Reopen target stage:
-- On human comment, automatically move the task to `stage:backlog`.
+- On human comment, automatically move the task to `stage:todo`.
 - Auto-reopen is silent (no automatic comment is posted).
 
 ## CLI identity discovery (“self”) requirement
@@ -188,7 +188,7 @@ For `create` (auto-assign to self) and any future ownership logic, Kanban Workfl
   - If **exactly 1** task is in `stage:in-progress`: `next` returns an error (don’t assign a second task).
   - If **more than 1** task is in `stage:in-progress`: `next` returns an error (inconsistent state).
 - Ignore `stage:in-review` for selection.
-- Eligible pool: select from `stage:backlog`.
+- Eligible pool: select from `stage:todo`.
 - Empty backlog: return an **info** response (“no work to do”).
 - Ordering:
   - Prefer explicit human ordering when available (configured during setup; see adapter-specific flags).
@@ -198,13 +198,13 @@ For `create` (auto-assign to self) and any future ownership logic, Kanban Workfl
 
 - Input: title + Markdown body.
 - Stage on create: do **not** override platform defaults at runtime; rely on the platform configuration done during onboarding/setup.
-  - (I.e., the platform’s “new item” default should correspond to the mapped canonical `stage:backlog`.)
+  - (I.e., the platform’s “new item” default should correspond to the mapped canonical `stage:todo`.)
 - Assignment: must assign to self as discovered via the CLI `whoami` mechanism; **fail hard** if self cannot be resolved or assignment cannot be performed.
 
 ### Auto-reopen
 
 - Trigger: human comment on a task in `stage:blocked` or `stage:in-review`.
-- Action: silently move the task to `stage:backlog`.
+- Action: silently move the task to `stage:todo`.
 
 ### Message formats
 
