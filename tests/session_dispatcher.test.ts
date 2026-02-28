@@ -30,7 +30,9 @@ describe('session dispatcher', () => {
     expect(first.activeTicketId).toBe('A1');
     expect(first.actions).toHaveLength(1);
     expect(first.actions[0]?.kind).toBe('work');
+    expect(first.actions[0]?.sessionLabel).toBe('A1 Fix login race');
     expect(first.actions[0]?.text).toContain('DO WORK NOW on ticket A1.');
+    expect(first.actions[0]?.text).toContain('Session label: A1 Fix login race');
     expect(first.actions[0]?.text).toContain('kanban-workflow continue --text');
     expect(first.actions[0]?.text).toContain('kanban-workflow blocked --text');
     expect(first.actions[0]?.text).toContain('kanban-workflow completed --result');
@@ -65,6 +67,31 @@ describe('session dispatcher', () => {
     expect(third.actions[1]?.sessionId).not.toBe(a1Session);
     expect(third.map.active?.ticketId).toBe('B2');
     expect(third.map.sessionsByTicket.A1?.closedAt).toBeTruthy();
+  });
+
+  it('refreshes existing worker session label when ticket title changes', () => {
+    const first = buildDispatcherPlan({
+      previousMap: { version: 1 as const, sessionsByTicket: {} },
+      now: new Date('2026-02-28T14:00:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: 'A1', inProgressIds: ['A1'] },
+        nextTicket: { kind: 'item', item: { id: 'A1', title: 'Old title' } },
+      },
+    });
+
+    const second = buildDispatcherPlan({
+      previousMap: first.map,
+      now: new Date('2026-02-28T14:05:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: 'A1', inProgressIds: ['A1'] },
+        nextTicket: { kind: 'item', item: { id: 'A1', title: 'New title after grooming' } },
+      },
+    });
+
+    expect(second.actions[0]?.sessionId).toBe(first.actions[0]?.sessionId);
+    expect(second.actions[0]?.sessionLabel).toBe('A1 New title after grooming');
+    expect(second.map.sessionsByTicket.A1?.sessionLabel).toBe('A1 New title after grooming');
+    expect(second.actions[0]?.text).toContain('Session label: A1 New title after grooming');
   });
 
   it('switches ticket on blocked transition with finalize + new work action', () => {

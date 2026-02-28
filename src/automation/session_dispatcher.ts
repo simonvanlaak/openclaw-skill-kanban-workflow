@@ -4,6 +4,7 @@ export const DEFAULT_SESSION_MAP_PATH = '.tmp/kwf-session-map.json';
 
 export type SessionEntry = {
   sessionId: string;
+  sessionLabel?: string;
   lastState: 'in_progress' | 'blocked' | 'completed' | 'no_work';
   lastSeenAt: string;
   closedAt?: string;
@@ -18,6 +19,7 @@ export type SessionMap = {
 export type DispatchAction = {
   kind: 'work' | 'finalize';
   sessionId: string;
+  sessionLabel?: string;
   ticketId: string;
   text: string;
 };
@@ -76,28 +78,45 @@ export function makeSessionId(ticketId: string, _now: Date): string {
   return `kanban-workflow-worker-${clean}`;
 }
 
-function ensureSessionForTicket(map: SessionMap, ticketId: string, nowIso: string): { sessionId: string; reused: boolean } {
+export function makeSessionLabel(ticketId: string, ticketTitle?: string): string {
+  const cleanTitle = (ticketTitle ?? '').replace(/\s+/g, ' ').trim();
+  return cleanTitle ? `${ticketId} ${cleanTitle}` : ticketId;
+}
+
+function ensureSessionForTicket(
+  map: SessionMap,
+  ticketId: string,
+  nowIso: string,
+  ticketTitle?: string,
+): { sessionId: string; sessionLabel: string; reused: boolean } {
   const existing = map.sessionsByTicket[ticketId];
+  const sessionLabel = ticketTitle
+    ? makeSessionLabel(ticketId, ticketTitle)
+    : existing?.sessionLabel || makeSessionLabel(ticketId, ticketTitle);
   if (existing && !existing.closedAt) {
     existing.lastState = 'in_progress';
     existing.lastSeenAt = nowIso;
+    existing.sessionLabel = sessionLabel;
     map.active = { ticketId, sessionId: existing.sessionId };
-    return { sessionId: existing.sessionId, reused: true };
+    return { sessionId: existing.sessionId, sessionLabel, reused: true };
   }
 
   const active = map.active;
   if (active && active.ticketId === ticketId) {
-    return { sessionId: active.sessionId, reused: true };
+    const activeEntry = map.sessionsByTicket[ticketId];
+    if (activeEntry) activeEntry.sessionLabel = sessionLabel;
+    return { sessionId: active.sessionId, sessionLabel, reused: true };
   }
 
   const sessionId = makeSessionId(ticketId, new Date(nowIso));
   map.sessionsByTicket[ticketId] = {
     sessionId,
+    sessionLabel,
     lastState: 'in_progress',
     lastSeenAt: nowIso,
   };
   map.active = { ticketId, sessionId };
-  return { sessionId, reused: false };
+  return { sessionId, sessionLabel, reused: false };
 }
 
 function finalizeTicket(map: SessionMap, ticketId: string, state: 'blocked' | 'completed', nowIso: string): SessionEntry | null {
@@ -168,12 +187,13 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
   };
 }
 
-function buildWorkInstruction(ticketId: string, payload: any): string {
+function buildWorkInstruction(ticketId: string, payload: any, sessionLabel: string): string {
   const context = extractTicketContext(payload, ticketId);
   const contextJson = JSON.stringify(context, null, 2);
 
   return [
     `DO WORK NOW on ticket ${ticketId}.`,
+    `Session label: ${sessionLabel}`,
     'Use the context JSON below as the single source of truth for this turn.',
     '',
     'You must end this turn with exactly one command:',
@@ -210,18 +230,21 @@ export function buildDispatcherPlan(params: {
       actions.push({
         kind: 'finalize',
         sessionId: finalized.sessionId,
+        sessionLabel: finalized.sessionLabel,
         ticketId: tick.id,
         text: `Ticket ${tick.id} transitioned to ${tickKind}. Wrap up this thread and stop active execution for this ticket.`,
       });
     }
 
     if (nextTicketId) {
-      const { sessionId } = ensureSessionForTicket(map, nextTicketId, nowIso);
+      const nextTicketTitle = output?.nextTicket?.item?.title ? String(output.nextTicket.item.title) : undefined;
+      const { sessionId, sessionLabel } = ensureSessionForTicket(map, nextTicketId, nowIso, nextTicketTitle);
       actions.push({
         kind: 'work',
         sessionId,
+        sessionLabel,
         ticketId: nextTicketId,
-        text: buildWorkInstruction(nextTicketId, output?.nextTicket),
+        text: buildWorkInstruction(nextTicketId, output?.nextTicket, sessionLabel),
       });
       return { map, actions, activeTicketId: nextTicketId };
     }
@@ -230,12 +253,14 @@ export function buildDispatcherPlan(params: {
   }
 
   if (currentTicketId) {
-    const { sessionId } = ensureSessionForTicket(map, currentTicketId, nowIso);
+    const currentTicketTitle = activeTicketPayload?.item?.title ? String(activeTicketPayload.item.title) : undefined;
+    const { sessionId, sessionLabel } = ensureSessionForTicket(map, currentTicketId, nowIso, currentTicketTitle);
     actions.push({
       kind: 'work',
       sessionId,
+      sessionLabel,
       ticketId: currentTicketId,
-      text: buildWorkInstruction(currentTicketId, activeTicketPayload),
+      text: buildWorkInstruction(currentTicketId, activeTicketPayload, sessionLabel),
     });
     return { map, actions, activeTicketId: currentTicketId };
   }
