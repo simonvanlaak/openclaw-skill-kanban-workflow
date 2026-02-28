@@ -28,6 +28,158 @@ function discoverPlaneOrderField(issuesRaw: unknown): string | undefined {
   return undefined;
 }
 
+function priorityValueFromUnknown(raw: unknown): number | undefined {
+  if (raw == null) return undefined;
+
+  if (typeof raw === 'string') {
+    const value = raw.trim().toLowerCase();
+    if (!value) return undefined;
+
+    const mapped: Record<string, number> = {
+      urgent: 5,
+      critical: 5,
+      blocker: 5,
+      highest: 5,
+      high: 4,
+      medium: 3,
+      med: 3,
+      normal: 3,
+      low: 2,
+      lowest: 1,
+      none: 0,
+      'no-priority': 0,
+      'no priority': 0,
+    };
+
+    if (value in mapped) return mapped[value];
+
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return numeric;
+    return undefined;
+  }
+
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) ? raw : undefined;
+  }
+
+  if (typeof raw === 'object') {
+    const obj: any = raw;
+    return (
+      priorityValueFromUnknown(obj.name) ??
+      priorityValueFromUnknown(obj.key) ??
+      priorityValueFromUnknown(obj.value) ??
+      priorityValueFromUnknown(obj.label)
+    );
+  }
+
+  return undefined;
+}
+
+function extractPriorityFromIssue(raw: unknown): number | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const issue: any = raw;
+
+  return (
+    priorityValueFromUnknown(issue.priority) ??
+    priorityValueFromUnknown(issue.priority_key) ??
+    priorityValueFromUnknown(issue.priorityKey) ??
+    priorityValueFromUnknown(issue.priority_value) ??
+    priorityValueFromUnknown(issue.priorityValue) ??
+    priorityValueFromUnknown(issue.priority_detail) ??
+    priorityValueFromUnknown(issue.priorityDetail)
+  );
+}
+
+function extractIssueAssigneeIds(raw: unknown): string[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const issue: any = raw;
+  const assignees = Array.isArray(issue.assignees) ? issue.assignees : [];
+  return assignees
+    .map((a: any) => {
+      if (typeof a === 'string' || typeof a === 'number') return String(a);
+      if (a && typeof a === 'object' && (a.id != null || a.user_id != null)) return String(a.id ?? a.user_id);
+      return undefined;
+    })
+    .filter((x): x is string => Boolean(x && x.trim().length > 0));
+}
+
+function idFromUnknown(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+
+  if (typeof raw === 'string' || typeof raw === 'number') {
+    const out = String(raw).trim();
+    return out.length > 0 ? out : undefined;
+  }
+
+  if (typeof raw === 'object') {
+    const obj: any = raw;
+    return (
+      idFromUnknown(obj.id) ??
+      idFromUnknown(obj.user_id) ??
+      idFromUnknown(obj.userId) ??
+      idFromUnknown(obj.uuid)
+    );
+  }
+
+  return undefined;
+}
+
+function extractIssueCreatorId(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const issue: any = raw;
+
+  return (
+    idFromUnknown(issue.created_by) ??
+    idFromUnknown(issue.createdBy) ??
+    idFromUnknown(issue.created_by_id) ??
+    idFromUnknown(issue.createdById) ??
+    idFromUnknown(issue.created_by_detail) ??
+    idFromUnknown(issue.createdByDetail)
+  );
+}
+
+function extractIssueStageName(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const issue: any = raw;
+  const name = issue.state?.name ?? issue.state_detail?.name ?? issue.stateDetail?.name;
+  if (name == null) return undefined;
+  const out = String(name).trim();
+  return out.length > 0 ? out : undefined;
+}
+
+function extractIssueBody(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const issue: any = raw;
+
+  const direct = [
+    issue.description,
+    issue.description_stripped,
+    issue.descriptionStripped,
+    issue.body,
+    issue.body_text,
+    issue.bodyText,
+  ];
+
+  for (const candidate of direct) {
+    if (candidate == null) continue;
+    const text = String(candidate).trim();
+    if (text.length > 0) return text;
+  }
+
+  const html = issue.description_html ?? issue.descriptionHtml ?? issue.body_html ?? issue.bodyHtml;
+  if (html != null) {
+    const text = String(html)
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&nbsp;/g, ' ')
+      .trim();
+    if (text.length > 0) return text;
+  }
+
+  return undefined;
+}
+
 import { CliRunner } from './cli.js';
 
 type PlaneState = {
@@ -254,6 +406,53 @@ export class PlaneAdapter implements Adapter {
       .map((i) => i.id);
   }
 
+  private async listIssuesRaw(projectId: string, opts?: { assigneeId?: string }): Promise<any> {
+    const args = ['issues', 'list', '-p', projectId] as string[];
+    if (opts?.assigneeId) args.push('--assignee', opts.assigneeId);
+    const out = await this.cli.run([...this.baseArgs, ...args, ...this.formatArgs]);
+    return out.trim().length > 0 ? JSON.parse(out) : [];
+  }
+
+  async reconcileAssignments(): Promise<void> {
+    for (const projectId of this.projectIds) {
+      const issuesRaw = await this.listIssuesRaw(projectId);
+      const issues = normalizePlaneIssuesList(issuesRaw);
+
+      for (const issue of issues) {
+        const stateName = extractIssueStageName(issue);
+        if (!stateName) continue;
+
+        const mappedStage = this.stageMap[stateName];
+        // Reconcile creator assignment for any mapped canonical stage.
+        // This matches the "every new ticket should auto-assign to its creator" expectation,
+        // while still skipping unmapped platform states (e.g. Done/Cancelled).
+        if (!mappedStage) continue;
+
+        const assigneeIds = extractIssueAssigneeIds(issue);
+        if (assigneeIds.length > 0) continue;
+
+        const creatorId = extractIssueCreatorId(issue);
+        const issueId = issue?.id ? String(issue.id) : undefined;
+        if (!creatorId || !issueId) continue;
+
+        try {
+          await this.cli.run([
+            ...this.baseArgs,
+            ...this.formatArgs,
+            'issues',
+            'assign',
+            '--project',
+            projectId,
+            issueId,
+            creatorId,
+          ]);
+        } catch {
+          // Best-effort only, never fail listing/selection on assign drift healing.
+        }
+      }
+    }
+  }
+
   async listBacklogIdsInOrder(): Promise<string[]> {
     // Try to preserve explicit UI ordering if we can discover it from API fields.
     // Otherwise require an explicit order field from setup, and finally fall back to updatedAt desc.
@@ -265,13 +464,9 @@ export class PlaneAdapter implements Adapter {
     const ids: string[] = [];
 
     for (const projectId of this.projectIds) {
-      const args = ['issues', 'list', '-p', projectId] as string[];
-      if (meId) args.push('--assignee', meId);
-
       // This call is intentionally constructed as `plane issues list ... -f json` to match
       // common wrapper usage (and our tests).
-      const out = await this.cli.run([...this.baseArgs, ...args, ...this.formatArgs]);
-      const issuesRaw = out.trim().length > 0 ? JSON.parse(out) : [];
+      const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: meId });
       const issues = normalizePlaneIssuesList(issuesRaw);
 
       const snap = await this.fetchSnapshotForProject(projectId, issues);
@@ -293,76 +488,53 @@ export class PlaneAdapter implements Adapter {
         }
       }
 
+      const byId = new Map(issues.map((x: any) => [String(x.id), x] as const));
+
+      // If priority differs across backlog items, prioritize by priority first.
+      const priorityById = new Map<string, number>();
+      for (const item of backlog) {
+        const p = extractPriorityFromIssue(byId.get(item.id));
+        if (p != null) priorityById.set(item.id, p);
+      }
+
+      const distinctPriorities = new Set(priorityById.values());
+      const usePriorityOrdering = distinctPriorities.size > 1;
+
       // Try preserve explicit ordering if we can discover it; otherwise updatedAt desc.
       const orderField = this.orderField ?? discoverPlaneOrderField(issuesRaw);
-
+      const orderById = new Map<string, number>();
       if (orderField) {
-        const byId = new Map(issues.map((x: any) => [String(x.id), x] as const));
-        const withOrder = backlog
-          .map((i) => ({
-            id: i.id,
-            order: Number(byId.get(i.id)?.[orderField]),
-            updatedAt: i.updatedAt,
-          }))
-          .filter((x) => Number.isFinite(x.order));
-
-        if (withOrder.length > 0) {
-          withOrder.sort((a, b) => a.order - b.order);
-          const orderedIds = withOrder.map((x) => x.id);
-          const orderedSet = new Set(orderedIds);
-
-          const rest = backlog
-            .filter((i) => !orderedSet.has(i.id))
-            .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-            .map((i) => i.id);
-
-          ids.push(...orderedIds, ...rest);
-          continue;
+        for (const item of backlog) {
+          const order = Number(byId.get(item.id)?.[orderField]);
+          if (Number.isFinite(order)) orderById.set(item.id, order);
         }
       }
 
-      // updatedAt desc fallback
-      backlog.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+      backlog.sort((a, b) => {
+        if (usePriorityOrdering) {
+          const pa = priorityById.get(a.id) ?? Number.NEGATIVE_INFINITY;
+          const pb = priorityById.get(b.id) ?? Number.NEGATIVE_INFINITY;
+          if (pa !== pb) return pb - pa;
+        }
+
+        const oa = orderById.get(a.id);
+        const ob = orderById.get(b.id);
+        const hasOa = oa != null;
+        const hasOb = ob != null;
+
+        if (hasOa && hasOb && oa !== ob) return oa - ob;
+        if (hasOa !== hasOb) return hasOa ? -1 : 1;
+
+        const updatedCmp = (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+        if (updatedCmp !== 0) return updatedCmp;
+
+        return String(a.id).localeCompare(String(b.id));
+      });
+
       ids.push(...backlog.map((i) => i.id));
     }
 
     return ids;
-
-    // If we can't discover an explicit ordering field, we fall back to updatedAt desc.
-    // (Some Plane surfaces don't expose a stable ordering field in the list response.)
-
-    // We re-use fetchSnapshot for stage mapping, but we need raw ordering values.
-    const snap = await this.fetchSnapshot();
-    const backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:backlog');
-
-    if (orderField) {
-      const byId = new Map(issues.map((x: any) => [String(x.id), x] as const));
-      const withOrder = backlog
-        .map((i) => ({
-          id: i.id,
-          order: Number(byId.get(i.id)?.[orderField]),
-          updatedAt: i.updatedAt,
-        }))
-        .filter((x) => Number.isFinite(x.order));
-
-      if (withOrder.length > 0) {
-        withOrder.sort((a, b) => a.order - b.order);
-        const orderedIds = withOrder.map((x) => x.id);
-        const orderedSet = new Set(orderedIds);
-
-        const rest = backlog
-          .filter((i) => !orderedSet.has(i.id))
-          .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-          .map((i) => i.id);
-
-        return [...orderedIds, ...rest];
-      }
-    }
-
-    // updatedAt desc fallback
-    return [...backlog]
-      .sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0))
-      .map((i) => i.id);
   }
 
   async getWorkItem(id: string): Promise<{
@@ -372,19 +544,32 @@ export class PlaneAdapter implements Adapter {
     stage: import('../stage.js').StageKey;
     body?: string;
     labels: string[];
+    assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
     updatedAt?: Date;
   }> {
     const snap = await this.fetchSnapshot();
     const item = snap.get(id);
     if (!item) throw new Error(`Plane work item not found: ${id}`);
 
+    const projectId = this.projectIds.find((pid) => String(pid) === String((item.raw as any)?.project_id)) ?? this.projectIds[0];
+    let body = extractIssueBody(item.raw);
+
+    // Fetch issue details for richer/full description where list payload is truncated.
+    try {
+      const details = await this.getIssueRaw(projectId, id);
+      body = extractIssueBody(details) ?? body;
+    } catch {
+      // Best-effort, never fail read path because detail endpoint shape varies.
+    }
+
     return {
       id: item.id,
       title: item.title,
       url: item.url,
       stage: item.stage.key,
-      body: undefined,
+      body,
       labels: item.labels,
+      assignees: item.assignees,
       updatedAt: item.updatedAt,
     };
   }
@@ -549,7 +734,9 @@ export class PlaneAdapter implements Adapter {
       const title = issue.name ?? issue.title ?? '';
       if (!title) continue;
 
-      const stateName = issue.state?.name ?? issue.state_detail?.name;
+      const stateName =
+        (typeof issue.state === 'string' ? issue.state : issue.state?.name) ??
+        (typeof issue.state_detail === 'string' ? issue.state_detail : issue.state_detail?.name);
       if (!stateName) continue;
 
       const mapped = this.stageMap[stateName];

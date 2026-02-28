@@ -117,6 +117,138 @@ describe('PlaneAdapter', () => {
     expect(snap.get('i3')?.stage.toString()).toBe('stage:in-progress');
   });
 
+  it('reconciles creator assignments for unassigned issues in mapped stages', async () => {
+    (execa as any as ExecaMock)
+      // issues list
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            { id: 'i1', name: 'Needs owner', state: { name: 'Todo' }, assignees: [], created_by: 'u1' },
+            { id: 'i2', name: 'Already assigned', state: { name: 'Todo' }, assignees: ['u2'], created_by: 'u2' },
+            { id: 'i3', name: 'In progress', state: { name: 'In Progress' }, assignees: [], created_by: 'u3' },
+          ],
+        }),
+      })
+      // assign i1 -> u1
+      .mockResolvedValueOnce({ stdout: '{}' })
+      // assign i3 -> u3
+      .mockResolvedValueOnce({ stdout: '{}' });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:backlog',
+        'In Progress': 'stage:in-progress',
+      },
+    });
+
+    await adapter.reconcileAssignments();
+
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['issues', 'list', '-p', 'proj', '-f', 'json']);
+    expect((execa as any).mock.calls[1]?.[1]).toEqual([
+      '-f',
+      'json',
+      'issues',
+      'assign',
+      '--project',
+      'proj',
+      'i1',
+      'u1',
+    ]);
+    expect((execa as any).mock.calls[2]?.[1]).toEqual([
+      '-f',
+      'json',
+      'issues',
+      'assign',
+      '--project',
+      'proj',
+      'i3',
+      'u3',
+    ]);
+    expect((execa as any).mock.calls.length).toBe(3);
+  });
+
+  it('reconciles creator assignment when creator is nested object', async () => {
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            {
+              id: 'i9',
+              name: 'Nested creator',
+              state: { name: 'Todo' },
+              assignees: [],
+              created_by: { id: 'u9' },
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ stdout: '{}' });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:backlog',
+      },
+    });
+
+    await adapter.reconcileAssignments();
+
+    expect((execa as any).mock.calls[1]?.[1]).toEqual([
+      '-f',
+      'json',
+      'issues',
+      'assign',
+      '--project',
+      'proj',
+      'i9',
+      'u9',
+    ]);
+  });
+
+  it('orders backlog by priority when priorities differ', async () => {
+    (execa as any as ExecaMock)
+      // whoami -> me + projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // issues list
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i-low',
+            name: 'Low priority but newer',
+            state: { name: 'stage:backlog' },
+            priority: 'low',
+            updated_at: '2026-02-27T12:00:00Z',
+          },
+          {
+            id: 'i-high',
+            name: 'High priority but older',
+            state: { name: 'stage:backlog' },
+            priority: 'high',
+            updated_at: '2026-02-27T10:00:00Z',
+          },
+        ]),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        'stage:backlog': 'stage:backlog',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
+
+    const ids = await adapter.listBacklogIdsInOrder();
+
+    expect(ids).toEqual(['i-high', 'i-low']);
+  });
+
   it('implements setStage via plane issues update --state <id>', async () => {
     (execa as any as ExecaMock)
       // fetchStates()
@@ -152,6 +284,72 @@ describe('PlaneAdapter', () => {
       's2',
       'i1',
     ]);
+  });
+
+  it('getWorkItem hydrates body/description from issue details for show/autopilot output', async () => {
+    (execa as any as ExecaMock)
+      // fetchSnapshot -> issues list
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i42',
+            name: 'Ticket with details body',
+            state: { name: 'Todo' },
+            description: 'Short list payload',
+          },
+        ]),
+      })
+      // getIssueRaw -> issues get
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          id: 'i42',
+          description: 'Full Plane description from details endpoint',
+        }),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:backlog',
+      },
+    });
+
+    const item = await adapter.getWorkItem('i42');
+
+    expect(item.body).toBe('Full Plane description from details endpoint');
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '-p', 'proj']);
+    expect((execa as any).mock.calls[1]?.[1]).toEqual(['-f', 'json', 'issues', 'get', '--project', 'proj', 'i42']);
+  });
+
+  it('getWorkItem falls back to stripped HTML description when only HTML is available', async () => {
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i43',
+            name: 'Ticket html',
+            state: { name: 'Todo' },
+          },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          id: 'i43',
+          description_html: '<p>Hello<br/>Plane</p>',
+        }),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:backlog',
+      },
+    });
+
+    const item = await adapter.getWorkItem('i43');
+    expect(item.body).toBe('Hello\nPlane');
   });
 
   it('implements addComment via Plane comment API', async () => {
