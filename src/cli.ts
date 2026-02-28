@@ -10,6 +10,7 @@ import { PlaneAdapter } from './adapters/plane.js';
 import { PlankaAdapter } from './adapters/planka.js';
 import { runAutopilotTick } from './automation/autopilot_tick.js';
 import { lockfile } from './automation/lockfile.js';
+import { buildDispatcherPlan, loadSessionMap, saveSessionMap } from './automation/session_dispatcher.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
 
 export type CliIo = {
@@ -33,6 +34,7 @@ function whatNextTipForCommand(cmd: string): string {
     case 'completed':
       return 'run `kanban-workflow autopilot-tick`';
     case 'autopilot-tick':
+    case 'cron-dispatch':
       return 'follow the returned instruction and use only: continue, blocked, completed';
     case 'show':
     case 'create':
@@ -84,6 +86,112 @@ async function loadCurrentAutopilotId(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+function buildHaltOptions(activeId?: string) {
+  const idFlag = activeId ? ` --id ${activeId} ` : ' ';
+  return {
+    continue: {
+      command: `kanban-workflow continue${idFlag}--text "update + next steps"`,
+      requires: 'single text message with update + next steps',
+    },
+    blocked: {
+      command: `kanban-workflow blocked${idFlag}--text "block reason + questions for humans"`,
+      requires: 'single text message with blocker reason + questions',
+    },
+    completed: {
+      command: `kanban-workflow completed${idFlag}--result "what was done"`,
+      requires: 'result/what was done message',
+    },
+  };
+}
+
+async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> {
+  const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
+  let output: any = res;
+
+  if (res.kind === 'started') {
+    if (!dryRun) {
+      await start(adapter, res.id);
+      await saveCurrentAutopilotId(res.id);
+    }
+    const current = await show(adapter, res.id);
+    output = {
+      tick: res,
+      nextTicket: current,
+      instruction: 'Work on this ticket now.',
+      haltOptions: buildHaltOptions(res.id),
+      dryRun,
+    };
+  } else if (res.kind === 'in_progress') {
+    if (!dryRun) {
+      const msg = `Progress update (autopilot): continuing work on this ticket. Decision reason: ${res.reasonCode ?? 'active_in_progress'}.`;
+      await update(adapter, res.id, msg);
+      await saveCurrentAutopilotId(res.id);
+    }
+    const current = await show(adapter, res.id);
+    output = {
+      tick: res,
+      nextTicket: current,
+      instruction: 'Continue working on this ticket now.',
+      haltOptions: buildHaltOptions(res.id),
+      dryRun,
+    };
+  } else if (res.kind === 'blocked') {
+    if (!dryRun) {
+      await ask(
+        adapter,
+        res.id,
+        `${res.reason} Last activity is ${res.minutesStale} minutes old. Please resolve dependency, then move back to In Progress.`,
+      );
+    }
+    const nextRes = await next(adapter);
+    if (nextRes.kind === 'item') {
+      if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
+      output = {
+        tick: res,
+        nextTicket: nextRes,
+        instruction: 'Previous ticket is blocked. Work on this next ticket now.',
+        haltOptions: buildHaltOptions(nextRes.item.id),
+        dryRun,
+      };
+    } else {
+      output = {
+        tick: res,
+        noWork: true,
+        instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
+        dryRun,
+      };
+    }
+  } else if (res.kind === 'completed') {
+    if (res.reasonCode !== 'completion_signal_strong') {
+      output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed', dryRun };
+    } else {
+      if (!dryRun) {
+        await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
+      }
+      const nextRes = await next(adapter);
+      if (nextRes.kind === 'item') {
+        if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
+        output = {
+          tick: res,
+          nextTicket: nextRes,
+          instruction: 'Previous ticket completed. Work on this next ticket now.',
+          haltOptions: buildHaltOptions(nextRes.item.id),
+          dryRun,
+        };
+      } else {
+        output = {
+          tick: res,
+          noWork: true,
+          instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
+          dryRun,
+        };
+      }
+    }
+  }
+
+  return output;
 }
 
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
@@ -296,25 +404,18 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       io.stdout.write(`Wrote ${configPath}\n`);
       io.stdout.write(
-        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`kanban-workflow autopilot-tick\`.\n`,
+        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`kanban-workflow cron-dispatch\`.\n`,
       );
 
       if (autopilotInstallCron) {
         const tz = autopilotTz ?? '';
-        const message = [
-          'Autopilot tick (kanban-workflow):',
-          '',
-          '- Run: kanban-workflow autopilot-tick',
-          '- If it starts a ticket, a separate always-on agent should do the actual work (read `show`, implement, `update`/`ask`, then `complete`).',
-          '',
-          'This job was created by `kanban-workflow setup --autopilot-install-cron`.',
-        ].join('\n');
+        const message = 'kanban-workflow cron-dispatch';
 
         const args = [
           'cron',
           'add',
           '--name',
-          'kanban-workflow autopilot tick',
+          'kanban-workflow autopilot dispatcher',
           '--session',
           'isolated',
           '--cron',
@@ -362,107 +463,39 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'autopilot-tick') {
       const dryRun = Boolean(flags['dry-run']);
-      const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
+      const output = await runAutopilotCommand(adapter, dryRun);
+      io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
 
-      const buildOptions = () => ({
-        continue: {
-          command: 'kanban-workflow continue --text "update + next steps"',
-          requires: 'single text message with update + next steps',
-        },
-        blocked: {
-          command: 'kanban-workflow blocked --text "block reason + questions for humans"',
-          requires: 'single text message with blocker reason + questions',
-        },
-        completed: {
-          command: 'kanban-workflow completed --result "what was done"',
-          requires: 'result/what was done message',
-        },
-      });
+    if (cmd === 'cron-dispatch') {
+      const dryRun = Boolean(flags['dry-run']);
+      const output = await runAutopilotCommand(adapter, dryRun);
+      const previousMap = await loadSessionMap();
+      const plan = buildDispatcherPlan({ autopilotOutput: output, previousMap, now: new Date() });
 
-      let output: unknown = res;
-
-      if (res.kind === 'started') {
-        if (!dryRun) {
-          await start(adapter, res.id);
-          await saveCurrentAutopilotId(res.id);
+      if (!dryRun) {
+        for (const action of plan.actions) {
+          const args = ['agent', '--session-id', action.sessionId, '--message', action.text];
+          if (flags.agent) args.push('--agent', String(flags.agent));
+          if (flags.thinking) args.push('--thinking', String(flags.thinking));
+          await execa('openclaw', args);
         }
-        const current = await show(adapter, res.id);
-        output = {
-          tick: res,
-          nextTicket: current,
-          instruction: 'Work on this ticket now.',
-          haltOptions: buildOptions(),
-          dryRun,
-        };
-      } else if (res.kind === 'in_progress') {
-        if (!dryRun) {
-          const msg = `Progress update (autopilot): continuing work on this ticket. Decision reason: ${res.reasonCode ?? 'active_in_progress'}.`;
-          await update(adapter, res.id, msg);
-          await saveCurrentAutopilotId(res.id);
-        }
-        const current = await show(adapter, res.id);
-        output = {
-          tick: res,
-          nextTicket: current,
-          instruction: 'Continue working on this ticket now.',
-          haltOptions: buildOptions(),
-          dryRun,
-        };
-      } else if (res.kind === 'blocked') {
-        if (!dryRun) {
-          await ask(
-            adapter,
-            res.id,
-            `${res.reason} Last activity is ${res.minutesStale} minutes old. Please resolve dependency, then move back to In Progress.`,
-          );
-        }
-        const nextRes = await next(adapter);
-        if (nextRes.kind === 'item') {
-          if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
-          output = {
-            tick: res,
-            nextTicket: nextRes,
-            instruction: 'Previous ticket is blocked. Work on this next ticket now.',
-            haltOptions: buildOptions(),
-            dryRun,
-          };
-        } else {
-          output = {
-            tick: res,
-            noWork: true,
-            instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
-            dryRun,
-          };
-        }
-      } else if (res.kind === 'completed') {
-        if (res.reasonCode !== 'completion_signal_strong') {
-          output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed', dryRun };
-        } else {
-          if (!dryRun) {
-            await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
-          }
-          const nextRes = await next(adapter);
-          if (nextRes.kind === 'item') {
-            if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
-            output = {
-              tick: res,
-              nextTicket: nextRes,
-              instruction: 'Previous ticket completed. Work on this next ticket now.',
-              haltOptions: buildOptions(),
-              dryRun,
-            };
-          } else {
-            output = {
-              tick: res,
-              noWork: true,
-              instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
-              dryRun,
-            };
-          }
-        }
+        await saveSessionMap(plan.map);
       }
 
-      io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
+      io.stdout.write(
+        `${JSON.stringify({
+          dispatch: {
+            dryRun,
+            actions: plan.actions,
+            activeTicketId: plan.activeTicketId,
+            mapPath: '.tmp/kwf-session-map.json',
+          },
+          autopilot: output,
+        }, null, 2)}\n`,
+      );
       writeWhatNext(io, cmd);
       return 0;
     }

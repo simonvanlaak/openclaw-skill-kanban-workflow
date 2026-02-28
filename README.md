@@ -65,7 +65,7 @@ Adapter flags:
 
 ### Autopilot decision model (single command)
 
-`autopilot-tick` now decides and executes one of three outcomes per run:
+`autopilot-tick` decides and executes one of three outcomes per run:
 
 - **continue/start**
   - if no active work exists and next backlog item is assigned to self, it starts it and returns current payload.
@@ -77,6 +77,19 @@ Adapter flags:
 Supported flags:
 
 - `--dry-run` -> evaluate decision without mutating ticket state
+
+### Cron dispatcher (session-per-ticket)
+
+Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick` and adds session routing:
+
+- persists ticket->session state in `.tmp/kwf-session-map.json`
+- reuses the same OpenClaw session while the same ticket stays `in_progress`
+- on `blocked`/`completed`, finalizes the old ticket session and starts a fresh session for the next ticket
+- recovers safely after restart by loading the persisted map (invalid/missing map falls back to empty state)
+
+`setup --autopilot-install-cron` now installs a minimal cron trigger message:
+
+- `kanban-workflow cron-dispatch`
 
 ### Completion proof gate
 

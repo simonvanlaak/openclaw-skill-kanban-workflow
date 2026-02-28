@@ -125,7 +125,7 @@ Required:
 Optional autopilot scheduling:
 - `--autopilot-cron-expr "*/5 * * * *"` (default)
 - `--autopilot-cron-tz "Europe/Berlin"` (optional)
-- `--autopilot-install-cron` (creates an OpenClaw cron job that runs `kanban-workflow autopilot-tick`)
+- `--autopilot-install-cron` (creates an OpenClaw cron job with minimal trigger `kanban-workflow cron-dispatch`)
 
 Adapter flags (summary):
 - GitHub: `--github-repo <owner/repo>`, optional `--github-project-number <number>`
