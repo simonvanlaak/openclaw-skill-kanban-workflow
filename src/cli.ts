@@ -53,6 +53,34 @@ function writeSetupRequiredError(io: CliIo): void {
   io.stderr.write('What next: run `kanban-workflow setup`\n');
 }
 
+function writeHelp(io: CliIo): void {
+  io.stdout.write(
+    [
+      'kanban-workflow help',
+      '',
+      'Core commands:',
+      '  kanban-workflow setup --adapter <github|plane|linear|planka> ...',
+      '  kanban-workflow autopilot-tick [--dry-run]',
+      '  kanban-workflow cron-dispatch [--dry-run] [--agent <id>] [--thinking <level>]',
+      '  kanban-workflow show --id <ticket-id>',
+      '  kanban-workflow next',
+      '',
+      'Execution commands (no --id required; uses active ticket context):',
+      '  kanban-workflow continue --text "update + next steps"',
+      '  kanban-workflow blocked --text "block reason + questions for humans"',
+      '  kanban-workflow completed --result "what was done"',
+      '',
+      'Legacy low-level commands (still available):',
+      '  kanban-workflow start --id <ticket-id>',
+      '  kanban-workflow update --id <ticket-id> --text "..."',
+      '  kanban-workflow ask --id <ticket-id> --text "..."',
+      '  kanban-workflow complete --id <ticket-id> --summary "..."',
+      '  kanban-workflow create --title "..." [--body "..."]',
+      '',
+    ].join('\n'),
+  );
+}
+
 const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
 
@@ -229,6 +257,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
   const configPath = 'config/kanban-workflow.json';
 
   try {
+    if (cmd === 'help' || cmd === '--help' || cmd === '-h') {
+      writeHelp(io);
+      return 0;
+    }
     if (flags.config) {
       throw new Error('Only a single config file is supported: config/kanban-workflow.json (no --config override)');
     }
