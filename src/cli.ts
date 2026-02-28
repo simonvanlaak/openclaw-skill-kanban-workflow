@@ -434,18 +434,20 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       io.stdout.write(`Wrote ${configPath}\n`);
       io.stdout.write(
-        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`kanban-workflow cron-dispatch\`.\n`,
+        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`npm run -s kanban-workflow -- cron-dispatch --agent ${WORKER_AGENT_ID}\` in /root/.openclaw/workspace/skills/kanban-workflow.\n`,
       );
 
       if (autopilotInstallCron) {
         const tz = autopilotTz ?? '';
-        const message = 'kanban-workflow cron-dispatch';
+        const message = `Run npm run -s kanban-workflow -- cron-dispatch --agent ${WORKER_AGENT_ID} from /root/.openclaw/workspace/skills/kanban-workflow.`;
 
         const args = [
           'cron',
           'add',
           '--name',
-          'kanban-workflow autopilot dispatcher',
+          'kanban-workflow dispatcher',
+          '--agent',
+          DISPATCHER_AGENT_ID,
           '--session',
           'isolated',
           '--cron',
@@ -506,7 +508,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const parsed = JSON.parse(cronList.stdout || '{}');
       const jobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
       const target = jobs.find((j: any) => j?.name === 'kanban-workflow dispatcher');
-      const message = `Run kanban-workflow cron-dispatch --agent ${WORKER_AGENT_ID} from /root/.openclaw/workspace/skills/kanban-workflow.`;
+      const message = `Run npm run -s kanban-workflow -- cron-dispatch --agent ${WORKER_AGENT_ID} from /root/.openclaw/workspace/skills/kanban-workflow.`;
 
       if (target?.id) {
         const args = ['cron', 'edit', String(target.id), '--agent', DISPATCHER_AGENT_ID, '--message', message, '--session', 'isolated'];
