@@ -87,6 +87,8 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
 - when a ticket is actionable (`started`/`in_progress`, or the next ticket after `blocked`/`completed`), dispatches a **do-work-now** payload into that ticket session
 - the payload includes full ticket context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
 - the payload enforces a strict end-of-turn contract: exactly one of `kanban-workflow continue --text ...`, `kanban-workflow blocked --text ...`, or `kanban-workflow completed --result ...`
+- dispatcher parses the **last valid** terminal command in worker output and applies the matching mutation (`continue` -> update, `blocked` -> ask, `completed` -> complete)
+- prompt constraint for worker reliability: put only one final command at the end of the message, keep argument payload quoted (single or double quotes supported), and avoid wrapping the final command in explanatory prose after it
 - on `blocked`/`completed`, finalizes the old ticket session and starts/reuses the mapped session for the next ticket
 - no-work ticks emit no dispatch actions (silent/no-op)
 - recovers safely after restart by loading the persisted map (invalid/missing map falls back to empty state)

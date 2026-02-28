@@ -22,6 +22,11 @@ export type DispatchAction = {
   text: string;
 };
 
+export type WorkerCommandResult =
+  | { kind: 'continue'; text: string }
+  | { kind: 'blocked'; text: string }
+  | { kind: 'completed'; result: string };
+
 type TicketContext = {
   id: string;
   title?: string;
@@ -105,6 +110,32 @@ function finalizeTicket(map: SessionMap, ticketId: string, state: 'blocked' | 'c
     map.active = undefined;
   }
   return entry;
+}
+
+export function applyWorkerCommandToSessionMap(
+  map: SessionMap,
+  ticketId: string,
+  command: WorkerCommandResult,
+  now: Date,
+): SessionMap {
+  const nowIso = now.toISOString();
+  const entry = map.sessionsByTicket[ticketId];
+  if (!entry) return map;
+
+  entry.lastSeenAt = nowIso;
+  if (command.kind === 'continue') {
+    entry.lastState = 'in_progress';
+    delete entry.closedAt;
+    map.active = { ticketId, sessionId: entry.sessionId };
+    return map;
+  }
+
+  entry.lastState = command.kind;
+  entry.closedAt = nowIso;
+  if (map.active?.ticketId === ticketId) {
+    map.active = undefined;
+  }
+  return map;
 }
 
 function extractTicketContext(payload: any, fallbackTicketId: string): TicketContext {

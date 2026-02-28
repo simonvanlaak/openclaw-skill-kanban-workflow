@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildDispatcherPlan } from '../src/automation/session_dispatcher.js';
+import { applyWorkerCommandToSessionMap, buildDispatcherPlan } from '../src/automation/session_dispatcher.js';
 
 describe('session dispatcher', () => {
   it('reuses same session for same in_progress ticket, then finalizes and starts new session on completion', () => {
@@ -109,5 +109,35 @@ describe('session dispatcher', () => {
     expect(plan.actions).toEqual([]);
     expect(plan.activeTicketId).toBeNull();
     expect(plan.map.active).toBeUndefined();
+  });
+
+  it('applies worker command back into session map state', () => {
+    const map = {
+      version: 1 as const,
+      active: { ticketId: 'A1', sessionId: 'kwf-A1-1' },
+      sessionsByTicket: {
+        A1: { sessionId: 'kwf-A1-1', lastState: 'in_progress' as const, lastSeenAt: '2026-02-28T13:00:00.000Z' },
+      },
+    };
+
+    const completedMap = applyWorkerCommandToSessionMap(
+      structuredClone(map),
+      'A1',
+      { kind: 'completed', result: 'done' },
+      new Date('2026-02-28T13:25:00.000Z'),
+    );
+    expect(completedMap.sessionsByTicket.A1?.lastState).toBe('completed');
+    expect(completedMap.sessionsByTicket.A1?.closedAt).toBe('2026-02-28T13:25:00.000Z');
+    expect(completedMap.active).toBeUndefined();
+
+    const reopened = applyWorkerCommandToSessionMap(
+      structuredClone(completedMap),
+      'A1',
+      { kind: 'continue', text: 'retrying' },
+      new Date('2026-02-28T13:30:00.000Z'),
+    );
+    expect(reopened.sessionsByTicket.A1?.lastState).toBe('in_progress');
+    expect(reopened.sessionsByTicket.A1?.closedAt).toBeUndefined();
+    expect(reopened.active?.ticketId).toBe('A1');
   });
 });
