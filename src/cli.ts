@@ -23,7 +23,7 @@ function whatNextTipForCommand(cmd: string): string {
     case 'setup':
       return 'run `kanban-workflow next`';
     case 'next':
-      return 'run `kanban-workflow start --id <id>`';
+      return 'run `kanban-workflow autopilot-tick`';
     case 'start':
       return 'prefer `kanban-workflow autopilot-tick` for orchestrated flow';
     case 'ask':
@@ -88,19 +88,18 @@ async function loadCurrentAutopilotId(): Promise<string | null> {
   }
 }
 
-function buildHaltOptions(activeId?: string) {
-  const idFlag = activeId ? ` --id ${activeId} ` : ' ';
+function buildHaltOptions() {
   return {
     continue: {
-      command: `kanban-workflow continue${idFlag}--text "update + next steps"`,
+      command: 'kanban-workflow continue --text "update + next steps"',
       requires: 'single text message with update + next steps',
     },
     blocked: {
-      command: `kanban-workflow blocked${idFlag}--text "block reason + questions for humans"`,
+      command: 'kanban-workflow blocked --text "block reason + questions for humans"',
       requires: 'single text message with blocker reason + questions',
     },
     completed: {
-      command: `kanban-workflow completed${idFlag}--result "what was done"`,
+      command: 'kanban-workflow completed --result "what was done"',
       requires: 'result/what was done message',
     },
   };
@@ -120,7 +119,7 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
       tick: res,
       nextTicket: current,
       instruction: 'Work on this ticket now.',
-      haltOptions: buildHaltOptions(res.id),
+      haltOptions: buildHaltOptions(),
       dryRun,
     };
   } else if (res.kind === 'in_progress') {
@@ -134,7 +133,7 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
       tick: res,
       nextTicket: current,
       instruction: 'Continue working on this ticket now.',
-      haltOptions: buildHaltOptions(res.id),
+      haltOptions: buildHaltOptions(),
       dryRun,
     };
   } else if (res.kind === 'blocked') {
@@ -152,7 +151,7 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
         tick: res,
         nextTicket: nextRes,
         instruction: 'Previous ticket is blocked. Work on this next ticket now.',
-        haltOptions: buildHaltOptions(nextRes.item.id),
+        haltOptions: buildHaltOptions(),
         dryRun,
       };
     } else {
@@ -177,7 +176,7 @@ async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> 
           tick: res,
           nextTicket: nextRes,
           instruction: 'Previous ticket completed. Work on this next ticket now.',
-          haltOptions: buildHaltOptions(nextRes.item.id),
+          haltOptions: buildHaltOptions(),
           dryRun,
         };
       } else {

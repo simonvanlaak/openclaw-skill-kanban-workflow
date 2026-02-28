@@ -97,9 +97,9 @@ describe('autopilot CLI simplified contract', () => {
     const out = parseFirstJson(cap.out);
     expect(out.nextTicket.item).toEqual({ id: 'A1', title: 'T', body: 'Full Plane ticket body' });
     expect(out.instruction).toBe('Continue working on this ticket now.');
-    expect(out.haltOptions.continue.command).toContain('kanban-workflow continue --id A1');
-    expect(out.haltOptions.blocked.command).toContain('kanban-workflow blocked --id A1');
-    expect(out.haltOptions.completed.command).toContain('kanban-workflow completed --id A1');
+    expect(out.haltOptions.continue.command).toContain('kanban-workflow continue --text');
+    expect(out.haltOptions.blocked.command).toContain('kanban-workflow blocked --text');
+    expect(out.haltOptions.completed.command).toContain('kanban-workflow completed --result');
     expect(out.dryRun).toBe(true);
   });
 
@@ -121,7 +121,7 @@ describe('autopilot CLI simplified contract', () => {
 
     const out = parseFirstJson(cap.out);
     expect(out.instruction).toBe('Previous ticket is blocked. Work on this next ticket now.');
-    expect(out.haltOptions.continue.command).toContain(' --id N1 ');
+    expect(out.haltOptions.continue.command).toContain('kanban-workflow continue --text');
   });
 
   it('executes completed branch only when completion proof gate is strong', async () => {
@@ -140,7 +140,7 @@ describe('autopilot CLI simplified contract', () => {
 
     const out = parseFirstJson(cap.out);
     expect(out.instruction).toBe('Previous ticket completed. Work on this next ticket now.');
-    expect(out.haltOptions.completed.command).toContain(' --id N1 ');
+    expect(out.haltOptions.completed.command).toContain('kanban-workflow completed --result');
   });
 
   it('holds action when completion proof gate fails', async () => {

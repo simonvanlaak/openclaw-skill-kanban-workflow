@@ -104,7 +104,7 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(0);
     expect(nextVerb).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow start --id <id>`/);
+    expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow autopilot-tick`/);
   });
 
   it('prints a what-next tip after start', async () => {
@@ -114,9 +114,7 @@ describe('cli what-next tips', () => {
 
     expect(code).toBe(0);
     expect(startVerb).toHaveBeenCalledOnce();
-    expect(cap.out.join('')).toMatch(/What next: run the actual execution in a subagent/);
-    expect(cap.out.join('')).toMatch(/then `kanban-workflow ask --id <id> --text/);
-    expect(cap.out.join('')).toMatch(/or `kanban-workflow update --id <id> --text/);
+    expect(cap.out.join('')).toMatch(/What next: prefer `kanban-workflow autopilot-tick` for orchestrated flow/);
   });
 
   it.each([
