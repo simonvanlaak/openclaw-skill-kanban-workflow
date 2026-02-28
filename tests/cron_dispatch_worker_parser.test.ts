@@ -39,6 +39,10 @@ vi.mock('../src/automation/autopilot_tick.js', () => ({
   runAutopilotTick: vi.fn(),
 }));
 
+vi.mock('../src/automation/auto_reopen.js', () => ({
+  runAutoReopenOnHumanComment: vi.fn(async () => ({ actions: [] })),
+}));
+
 vi.mock('../src/verbs/verbs.js', () => ({
   show: vi.fn(async (_adapter: unknown, id: string) => ({ item: { id, title: 'T' }, comments: [] })),
   next: vi.fn(async () => ({ kind: 'none' })),
@@ -113,7 +117,7 @@ describe('cron-dispatch worker parser + execution integration', () => {
     const code = await runCli(['cron-dispatch', '--agent', 'kwf-worker-test'], io);
 
     expect(code).toBe(0);
-    expect(update).toHaveBeenCalledOnce(); // autopilot in_progress heartbeat update
+    expect(update).not.toHaveBeenCalled(); // no boilerplate heartbeat update on in_progress
     expect(complete).toHaveBeenCalledWith(expect.anything(), 'A1', 'Implemented fix across parser + dispatcher.');
     expect(ask).not.toHaveBeenCalled();
 
