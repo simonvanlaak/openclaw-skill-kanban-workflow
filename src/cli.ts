@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 
 import { execa } from 'execa';
 
@@ -264,6 +265,52 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
   }
 
   return { cmd, flags };
+}
+
+function makeWorkerSessionKey(agentId: string, workerSessionId: string): string {
+  return `agent:${agentId}:${workerSessionId.toLowerCase()}`;
+}
+
+async function dispatchWorkerTurn(params: {
+  agentId: string;
+  sessionId: string;
+  text: string;
+  thinking: string;
+}): Promise<{ workerOutput: string; raw: string }> {
+  const payload = {
+    idempotencyKey: randomUUID(),
+    message: params.text,
+    agentId: params.agentId,
+    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
+    thinking: params.thinking,
+  };
+
+  const run = await execa('openclaw', [
+    'gateway',
+    'call',
+    'agent',
+    '--expect-final',
+    '--json',
+    '--params',
+    JSON.stringify(payload),
+  ]);
+
+  const raw = String(run.stdout ?? '').trim();
+  let workerOutput = raw;
+
+  try {
+    const parsed = JSON.parse(raw);
+    const payloads: any[] = Array.isArray(parsed?.result?.payloads) ? parsed.result.payloads : [];
+    const asText = payloads
+      .map((p) => (typeof p?.text === 'string' ? p.text : ''))
+      .filter((x) => x.trim().length > 0)
+      .join('\n');
+    if (asText.trim()) workerOutput = asText;
+  } catch {
+    // fallback to raw stdout
+  }
+
+  return { workerOutput: `${workerOutput}\n${run.stderr ?? ''}`, raw };
 }
 
 export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.stdout, stderr: process.stderr }): Promise<number> {
@@ -609,11 +656,15 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         for (const action of plan.actions) {
           const effectiveAgent = String(flags.agent ?? WORKER_AGENT_ID);
           const effectiveThinking = String(flags.thinking ?? 'high');
-          const args = ['agent', '--session-id', action.sessionId, '--message', action.text, '--agent', effectiveAgent, '--thinking', effectiveThinking];
-          const run = await execa('openclaw', args);
+          const dispatched = await dispatchWorkerTurn({
+            agentId: effectiveAgent,
+            sessionId: action.sessionId,
+            text: action.text,
+            thinking: effectiveThinking,
+          });
 
           if (action.kind === 'work') {
-            const workerOutput = `${run.stdout ?? ''}\n${run.stderr ?? ''}`;
+            const workerOutput = dispatched.workerOutput;
             const contract = validateWorkerResponseContract(workerOutput);
             const parsed = contract.command;
 

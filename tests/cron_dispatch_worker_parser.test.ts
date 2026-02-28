@@ -122,14 +122,22 @@ describe('cron-dispatch worker parser + execution integration', () => {
     } as any);
 
     vi.mocked(execa).mockResolvedValueOnce({
-      stdout: [
-        'Done.',
-        'EVIDENCE',
-        '- executed: tests + parser hardening',
-        '- key result/output: all target tests pass',
-        '- changed files: src/automation/worker_contract.ts, src/cli.ts',
-        'kanban-workflow completed --result "Implemented fix across parser + dispatcher."',
-      ].join('\n'),
+      stdout: JSON.stringify({
+        result: {
+          payloads: [
+            {
+              text: [
+                'Done.',
+                'EVIDENCE',
+                '- executed: tests + parser hardening',
+                '- key result/output: all target tests pass',
+                '- changed files: src/automation/worker_contract.ts, src/cli.ts',
+                'kanban-workflow completed --result "Implemented fix across parser + dispatcher."',
+              ].join('\n'),
+            },
+          ],
+        },
+      }),
       stderr: '',
     } as any);
 
@@ -140,6 +148,14 @@ describe('cron-dispatch worker parser + execution integration', () => {
     expect(update).not.toHaveBeenCalled(); // no boilerplate heartbeat update on in_progress
     expect(complete).toHaveBeenCalledWith(expect.anything(), 'A1', 'Implemented fix across parser + dispatcher.');
     expect(ask).not.toHaveBeenCalled();
+    expect(execa).toHaveBeenCalledWith(
+      'openclaw',
+      expect.arrayContaining(['gateway', 'call', 'agent', '--expect-final', '--json', '--params', expect.any(String)]),
+    );
+    const execaArgs = vi.mocked(execa).mock.calls[0]?.[1] as string[];
+    const paramsJson = execaArgs[execaArgs.indexOf('--params') + 1];
+    const params = JSON.parse(paramsJson);
+    expect(params.sessionKey).toBe('agent:kwf-worker-test:kanban-workflow-worker-a1');
 
     const out = parseFirstJson(cap.out);
     expect(out.dispatch.execution[0].outcome).toBe('applied');

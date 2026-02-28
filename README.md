@@ -84,7 +84,8 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
 
 - dispatcher responsibilities
   - persist ticket->session state in `.tmp/kwf-session-map.json`
-  - reuse the same OpenClaw session while the same ticket stays `in_progress`
+  - reuse the same OpenClaw worker session key while the same ticket stays `in_progress`
+  - route worker turns via `openclaw gateway call agent` with `sessionKey=agent:<worker-agent-id>:kanban-workflow-worker-<ticket-id>`
   - dispatch a **do-work-now** payload with full context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
   - enforce strict worker contract before any mutation is applied
   - emit machine-readable execution records (`applied` | `parse_error` | `mutation_error`) for observability
