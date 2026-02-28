@@ -66,9 +66,9 @@ export async function saveSessionMap(map: SessionMap, path = DEFAULT_SESSION_MAP
   await fs.writeFile(path, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
 }
 
-export function makeSessionId(ticketId: string, now: Date): string {
+export function makeSessionId(ticketId: string, _now: Date): string {
   const clean = ticketId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64);
-  return `kwf-${clean}-${now.getTime()}`;
+  return `kanban-workflow-worker-${clean}`;
 }
 
 function ensureSessionForTicket(map: SessionMap, ticketId: string, nowIso: string): { sessionId: string; reused: boolean } {
