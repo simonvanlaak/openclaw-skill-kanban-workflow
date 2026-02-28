@@ -105,14 +105,24 @@ Autopilot flags:
 - `kanban-workflow autopilot-tick --dry-run`
 
 Cron dispatcher behavior (`kanban-workflow cron-dispatch`):
-- maintains per-ticket session mapping in `.tmp/kwf-session-map.json`
-- dispatches a structured do-work-now payload to the mapped session whenever a ticket is actionable
-- payload includes full ticket context (id/title/body/comments/attachments/links)
-- payload requires the worker to end the turn with exactly one command:
-  - `kanban-workflow continue --text ...`
-  - `kanban-workflow blocked --text ...`
-  - `kanban-workflow completed --result ...`
-- when no work is available, dispatch is silent/no-op
+- **Dispatcher responsibilities**
+  - run `autopilot-tick`, decide actionable ticket, and route work to a session-per-ticket
+  - provide full context payload (id/title/body/comments/attachments/links)
+  - enforce worker output contract before any mutation is applied
+  - persist/rotate `.tmp/kwf-session-map.json` lifecycle state and finalize old sessions on blocked/completed
+  - emit machine-readable dispatch/execution logs (actions, outcomes, contract violations)
+- **Worker responsibilities**
+  - execute concrete work during the turn (tool/command/file change), unless truly blocked
+  - include an `EVIDENCE` section (`executed`, `key result/output`, `changed files`)
+  - end with exactly one terminal command on the final non-empty line:
+    - `kanban-workflow continue --text ...`
+    - `kanban-workflow blocked --text ...`
+    - `kanban-workflow completed --result ...`
+  - avoid boilerplate progress spam; send only evidence-backed updates
+- **Strict contracts**
+  - command parse is strict: exactly one terminal command, valid flag, final line
+  - continue proof-gate: `continue` is rejected unless evidence shows concrete execution
+  - if no work is available, dispatch is silent/no-op
 
 ## CLI ergonomics: "What next" tips
 

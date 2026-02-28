@@ -12,7 +12,10 @@ import { runAutopilotTick } from './automation/autopilot_tick.js';
 import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { lockfile } from './automation/lockfile.js';
 import { applyWorkerCommandToSessionMap, buildDispatcherPlan, loadSessionMap, saveSessionMap } from './automation/session_dispatcher.js';
+import { extractWorkerTerminalCommand, validateWorkerResponseContract, type WorkerTerminalCommand } from './automation/worker_contract.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
+
+export { extractWorkerTerminalCommand } from './automation/worker_contract.js';
 
 export type CliIo = {
   stdout: { write(chunk: string): void };
@@ -54,110 +57,6 @@ function writeSetupRequiredError(io: CliIo): void {
   io.stderr.write('What next: run `kanban-workflow setup`\n');
 }
 
-type WorkerTerminalCommand =
-  | { kind: 'continue'; text: string }
-  | { kind: 'blocked'; text: string }
-  | { kind: 'completed'; result: string };
-
-function decodeEscapedChar(ch: string): string {
-  if (ch === 'n') return '\n';
-  if (ch === 't') return '\t';
-  if (ch === 'r') return '\r';
-  return ch;
-}
-
-function parseShellWords(command: string): string[] {
-  const out: string[] = [];
-  let token = '';
-  let quote: '"' | "'" | null = null;
-
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i]!;
-    const next = command[i + 1];
-
-    if (quote) {
-      if (ch === '\\' && i + 1 < command.length) {
-        token += decodeEscapedChar(command[i + 1]!);
-        i++;
-        continue;
-      }
-      if (ch === quote) {
-        quote = null;
-        continue;
-      }
-      token += ch;
-      continue;
-    }
-
-    if (ch === '"' || ch === "'") {
-      quote = ch;
-      continue;
-    }
-
-    if (/\s/.test(ch)) {
-      if (token.length > 0) {
-        out.push(token);
-        token = '';
-      }
-      continue;
-    }
-
-    if (ch === '\\' && i + 1 < command.length) {
-      token += decodeEscapedChar(command[i + 1]!);
-      i++;
-      continue;
-    }
-
-    if ((ch === '&' && next === '&') || (ch === '|' && next === '|') || ch === ';') {
-      if (token.length > 0) out.push(token);
-      break;
-    }
-
-    token += ch;
-  }
-
-  if (token.length > 0) out.push(token);
-  return out;
-}
-
-export function extractWorkerTerminalCommand(raw: string): WorkerTerminalCommand | null {
-  const s = raw || '';
-  const marker = 'kanban-workflow';
-  let searchFrom = 0;
-  let latest: WorkerTerminalCommand | null = null;
-
-  while (true) {
-    const idx = s.toLowerCase().indexOf(marker, searchFrom);
-    if (idx < 0) break;
-
-    const segment = s.slice(idx);
-    const words = parseShellWords(segment);
-    searchFrom = idx + marker.length;
-
-    if (words.length < 4) continue;
-    if (words[0]?.toLowerCase() !== 'kanban-workflow') continue;
-
-    const cmd = words[1]?.toLowerCase();
-    if (cmd === 'continue' || cmd === 'blocked') {
-      const flagIndex = words.findIndex((w, i) => i >= 2 && w === '--text');
-      const text = flagIndex >= 0 ? words[flagIndex + 1] : undefined;
-      if (text && text.trim().length > 0) {
-        latest = { kind: cmd, text };
-      }
-      continue;
-    }
-
-    if (cmd === 'completed') {
-      const flagIndex = words.findIndex((w, i) => i >= 2 && w === '--result');
-      const result = flagIndex >= 0 ? words[flagIndex + 1] : undefined;
-      if (result && result.trim().length > 0) {
-        latest = { kind: 'completed', result };
-      }
-    }
-  }
-
-  return latest;
-}
 
 function writeHelp(io: CliIo): void {
   io.stdout.write(
@@ -715,16 +614,17 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
           if (action.kind === 'work') {
             const workerOutput = `${run.stdout ?? ''}\n${run.stderr ?? ''}`;
-            const parsed = extractWorkerTerminalCommand(workerOutput);
+            const contract = validateWorkerResponseContract(workerOutput);
+            const parsed = contract.command;
 
-            if (!parsed) {
+            if (!contract.ok || !parsed) {
               execution.push({
                 sessionId: action.sessionId,
                 ticketId: action.ticketId,
                 parsed,
                 workerOutput,
                 outcome: 'parse_error',
-                detail: 'No valid kanban-workflow continue|blocked|completed command found in worker output.',
+                detail: contract.violations.join(' '),
               });
               continue;
             }
@@ -745,6 +645,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
                 parsed,
                 workerOutput,
                 outcome: 'applied',
+                detail: `evidence.present=${String(contract.evidence.present)} evidence.concrete=${String(contract.evidence.hasConcreteExecution)}`,
               });
             } catch (err: any) {
               execution.push({

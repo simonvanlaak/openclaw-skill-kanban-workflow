@@ -82,16 +82,27 @@ Supported flags:
 
 Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick` and adds session routing:
 
-- persists ticket->session state in `.tmp/kwf-session-map.json`
-- reuses the same OpenClaw session while the same ticket stays `in_progress`
-- when a ticket is actionable (`started`/`in_progress`, or the next ticket after `blocked`/`completed`), dispatches a **do-work-now** payload into that ticket session
-- the payload includes full ticket context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
-- the payload enforces a strict end-of-turn contract: exactly one of `kanban-workflow continue --text ...`, `kanban-workflow blocked --text ...`, or `kanban-workflow completed --result ...`
-- dispatcher parses the **last valid** terminal command in worker output and applies the matching mutation (`continue` -> update, `blocked` -> ask, `completed` -> complete)
-- prompt constraint for worker reliability: put only one final command at the end of the message, keep argument payload quoted (single or double quotes supported), and avoid wrapping the final command in explanatory prose after it
-- on `blocked`/`completed`, finalizes the old ticket session and starts/reuses the mapped session for the next ticket
-- no-work ticks emit no dispatch actions (silent/no-op)
-- recovers safely after restart by loading the persisted map (invalid/missing map falls back to empty state)
+- dispatcher responsibilities
+  - persist ticket->session state in `.tmp/kwf-session-map.json`
+  - reuse the same OpenClaw session while the same ticket stays `in_progress`
+  - dispatch a **do-work-now** payload with full context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
+  - enforce strict worker contract before any mutation is applied
+  - emit machine-readable execution records (`applied` | `parse_error` | `mutation_error`) for observability
+- worker responsibilities
+  - perform concrete work during the turn unless truly blocked
+  - include an `EVIDENCE` section (what was executed, key output, changed files)
+  - end with exactly one terminal command on the final non-empty line:
+    - `kanban-workflow continue --text ...`
+    - `kanban-workflow blocked --text ...`
+    - `kanban-workflow completed --result ...`
+  - avoid boilerplate progress spam
+- strict contracts
+  - parser requires exactly one terminal command, valid flags, and final-line placement
+  - continue proof-gate: `continue` is rejected unless EVIDENCE contains concrete execution proof
+- lifecycle handling
+  - on `blocked`/`completed`, finalize old ticket session and start/reuse mapped session for next ticket
+  - no-work ticks emit no dispatch actions (silent/no-op)
+  - restart-safe map loading (invalid/missing map falls back to empty state)
 
 `setup --autopilot-install-cron` now installs a minimal cron trigger message:
 

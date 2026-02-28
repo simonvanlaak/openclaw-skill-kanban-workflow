@@ -57,6 +57,7 @@ import { execa } from 'execa';
 
 import { runAutopilotTick } from '../src/automation/autopilot_tick.js';
 import { extractWorkerTerminalCommand, runCli } from '../src/cli.js';
+import { validateWorkerResponseContract } from '../src/automation/worker_contract.js';
 import { loadSessionMap } from '../src/automation/session_dispatcher.js';
 import { ask, complete, update } from '../src/verbs/verbs.js';
 
@@ -86,11 +87,23 @@ describe('cron-dispatch worker parser + execution integration', () => {
     await fs.rm('.tmp/kwf-session-map.json', { force: true });
   });
 
-  it('extracts the last valid terminal command with multiline and escaped quotes', () => {
-    const parsed = extractWorkerTerminalCommand([
+  it('enforces strict terminal command + evidence contract', () => {
+    const invalid = validateWorkerResponseContract([
       'thinking... here are examples:',
       'kanban-workflow continue --text "template only"',
       'final:',
+      'kanban-workflow blocked --text "Dependency says \\\"no\\\" for now.\\nNeed maintainer approval."',
+    ].join('\n'));
+
+    expect(invalid.ok).toBe(false);
+    expect(invalid.violations.join(' ')).toContain('exactly one terminal');
+
+    const parsed = extractWorkerTerminalCommand([
+      'Did work.',
+      'EVIDENCE',
+      '- executed: plane issue update command',
+      '- key result/output: API accepted update',
+      '- changed files: none',
       'kanban-workflow blocked --text "Dependency says \\\"no\\\" for now.\\nNeed maintainer approval."',
     ].join('\n'));
 
@@ -109,7 +122,14 @@ describe('cron-dispatch worker parser + execution integration', () => {
     } as any);
 
     vi.mocked(execa).mockResolvedValueOnce({
-      stdout: 'Done.\n```bash\nkanban-workflow completed --result "Implemented fix across parser + dispatcher."\n```',
+      stdout: [
+        'Done.',
+        'EVIDENCE',
+        '- executed: tests + parser hardening',
+        '- key result/output: all target tests pass',
+        '- changed files: src/automation/worker_contract.ts, src/cli.ts',
+        'kanban-workflow completed --result "Implemented fix across parser + dispatcher."',
+      ].join('\n'),
       stderr: '',
     } as any);
 
