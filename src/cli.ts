@@ -238,8 +238,8 @@ function buildHaltOptions() {
   };
 }
 
-async function runAutopilotCommand(adapter: any, dryRun: boolean): Promise<any> {
-  const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun });
+async function runAutopilotCommand(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:backlog'): Promise<any> {
+  const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun, requeueTargetStage });
   const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
   let output: any = res;
 
@@ -511,13 +511,25 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       const autopilotCronExpr = String(flags['autopilot-cron-expr'] ?? '*/5 * * * *').trim();
       const autopilotTz = flags['autopilot-cron-tz'] ? String(flags['autopilot-cron-tz']).trim() : undefined;
+      const autopilotRequeueTargetStage = String(flags['autopilot-requeue-target-stage'] ?? 'stage:backlog').trim();
+      if (!['stage:backlog', 'stage:blocked', 'stage:in-progress', 'stage:in-review'].includes(autopilotRequeueTargetStage)) {
+        throw new Error('setup --autopilot-requeue-target-stage must be one of: stage:backlog, stage:blocked, stage:in-progress, stage:in-review');
+      }
       const autopilotInstallCron = Boolean(flags['autopilot-install-cron']);
 
       await runSetup({
         fs,
         configPath,
         force,
-        config: { version: 1, autopilot: { cronExpr: autopilotCronExpr, tz: autopilotTz || undefined }, adapter: adapterCfg },
+        config: {
+          version: 1,
+          autopilot: {
+            cronExpr: autopilotCronExpr,
+            tz: autopilotTz || undefined,
+            requeueTargetStage: autopilotRequeueTargetStage as import('./stage.js').StageKey,
+          },
+          adapter: adapterCfg,
+        },
         validate: async () => {
           // Validate ALL read-only verb prerequisites.
           const adapter = await adapterFromConfig(adapterCfg);
@@ -661,6 +673,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     const adapter = await adapterFromConfig(config.adapter);
+    const requeueTargetStage = (config?.autopilot?.requeueTargetStage ?? 'stage:backlog') as import('./stage.js').StageKey;
 
     if (cmd === 'show') {
       const id = String(flags.id ?? '');
@@ -672,7 +685,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'autopilot-tick') {
       const dryRun = Boolean(flags['dry-run']);
-      const output = await runAutopilotCommand(adapter, dryRun);
+      const output = await runAutopilotCommand(adapter, dryRun, requeueTargetStage);
       io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
       writeWhatNext(io, cmd);
       return 0;
@@ -680,7 +693,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'cron-dispatch') {
       const dryRun = Boolean(flags['dry-run']);
-      const output = await runAutopilotCommand(adapter, dryRun);
+      const output = await runAutopilotCommand(adapter, dryRun, requeueTargetStage);
       const previousMap = await loadSessionMap();
       const plan = buildDispatcherPlan({ autopilotOutput: output, previousMap, now: new Date() });
 
@@ -696,8 +709,8 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       if (!dryRun) {
         for (const action of plan.actions) {
           const effectiveAgent = String(flags.agent ?? WORKER_AGENT_ID);
-          const args = ['agent', '--session-id', action.sessionId, '--message', action.text, '--agent', effectiveAgent];
-          if (flags.thinking) args.push('--thinking', String(flags.thinking));
+          const effectiveThinking = String(flags.thinking ?? 'high');
+          const args = ['agent', '--session-id', action.sessionId, '--message', action.text, '--agent', effectiveAgent, '--thinking', effectiveThinking];
           const run = await execa('openclaw', args);
 
           if (action.kind === 'work') {
