@@ -102,20 +102,19 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
   - continue proof-gate: `continue` is rejected unless EVIDENCE contains concrete execution proof
 - lifecycle handling
   - on `blocked`/`completed`, finalize old ticket session and start/reuse mapped session for next ticket
-  - no-work ticks emit no dispatch actions (silent/no-op)
+  - no-work ticks emit no worker dispatch actions; first no-work hit in a streak sends a Rocket.Chat alert to `simon.vanlaak` (configurable via env)
   - restart-safe map loading (invalid/missing map falls back to empty state)
 
 `setup --autopilot-install-cron` now installs a minimal cron trigger message:
 
 - `kanban-workflow cron-dispatch`
 
-### Completion proof gate
+### Completion policy
 
-Auto-complete only fires on strong markers in recent comments to reduce false positives, e.g.:
+Auto-complete from comment markers is disabled.
+Completion must come from explicit worker terminal action:
 
-- `Completed:`
-- `[done-proof]`
-- `proof:`
+- `kanban-workflow completed --result "what was done"`
 
 ### Continuous status updates
 

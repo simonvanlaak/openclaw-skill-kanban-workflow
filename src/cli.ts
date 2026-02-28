@@ -12,7 +12,13 @@ import { PlankaAdapter } from './adapters/planka.js';
 import { runAutopilotTick } from './automation/autopilot_tick.js';
 import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { lockfile } from './automation/lockfile.js';
-import { applyWorkerCommandToSessionMap, buildDispatcherPlan, loadSessionMap, saveSessionMap } from './automation/session_dispatcher.js';
+import {
+  applyWorkerCommandToSessionMap,
+  buildDispatcherPlan,
+  loadSessionMap,
+  saveSessionMap,
+  type SessionMap,
+} from './automation/session_dispatcher.js';
 import { extractWorkerTerminalCommand, validateWorkerResponseContract, type WorkerTerminalCommand } from './automation/worker_contract.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
 
@@ -88,6 +94,8 @@ const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
 const DISPATCHER_AGENT_ID = 'kanban-workflow-dispatcher';
 const WORKER_AGENT_ID = 'kanban-workflow-worker';
+const DEFAULT_NO_WORK_ALERT_CHANNEL = 'rocketchat';
+const DEFAULT_NO_WORK_ALERT_TARGET = 'simon.vanlaak';
 
 async function ensurePlaneEnvFromHelper(): Promise<void> {
   if ((process.env.PLANE_API_KEY ?? '').trim()) return;
@@ -285,12 +293,19 @@ async function dispatchWorkerTurn(params: {
     thinking: params.thinking,
   };
 
+  const gatewayTimeoutMsRaw = Number(process.env.KWF_GATEWAY_TIMEOUT_MS ?? '120000');
+  const gatewayTimeoutMs = Number.isFinite(gatewayTimeoutMsRaw) && gatewayTimeoutMsRaw > 0
+    ? Math.floor(gatewayTimeoutMsRaw)
+    : 120000;
+
   const run = await execa('openclaw', [
     'gateway',
     'call',
     'agent',
     '--expect-final',
     '--json',
+    '--timeout',
+    String(gatewayTimeoutMs),
     '--params',
     JSON.stringify(payload),
   ]);
@@ -311,6 +326,94 @@ async function dispatchWorkerTurn(params: {
   }
 
   return { workerOutput: `${workerOutput}\n${run.stderr ?? ''}`, raw };
+}
+
+type NoWorkAlertResult = {
+  outcome: 'first_hit_sent' | 'first_hit_skipped' | 'repeat_suppressed' | 'send_error';
+  channel?: string;
+  target?: string;
+  message?: string;
+  reasonCode?: string;
+  detail?: string;
+};
+
+function noWorkTickFromOutput(output: any): { kind?: string; reasonCode?: string } {
+  const tick = output?.tick ?? output;
+  if (!tick || typeof tick !== 'object') return {};
+  return {
+    kind: typeof tick.kind === 'string' ? tick.kind : undefined,
+    reasonCode: typeof tick.reasonCode === 'string' ? tick.reasonCode : undefined,
+  };
+}
+
+function buildNoWorkFirstHitAlertMessage(reasonCode?: string): string {
+  const reasonSuffix = reasonCode ? ` (reason: ${reasonCode})` : '';
+  return `Kanban autopilot first no-work hit: there is no actionable ticket right now${reasonSuffix}. I will stay idle until a new ticket becomes actionable.`;
+}
+
+async function maybeSendNoWorkFirstHitAlert(params: {
+  output: any;
+  previousMap: SessionMap;
+  map: SessionMap;
+  dryRun: boolean;
+}): Promise<NoWorkAlertResult | null> {
+  const tick = noWorkTickFromOutput(params.output);
+  if (tick.kind !== 'no_work') return null;
+
+  const hasExistingNoWorkStreak = Boolean(params.previousMap.noWork);
+  const alreadyAlertedInStreak = Boolean(params.previousMap.noWork?.firstHitAlertSentAt);
+  if (hasExistingNoWorkStreak && alreadyAlertedInStreak) {
+    return { outcome: 'repeat_suppressed', reasonCode: tick.reasonCode };
+  }
+
+  if (params.dryRun) {
+    return { outcome: 'first_hit_skipped', reasonCode: tick.reasonCode, detail: 'dry_run' };
+  }
+
+  const channel = (process.env.KWF_NO_WORK_ALERT_CHANNEL ?? DEFAULT_NO_WORK_ALERT_CHANNEL).trim() || DEFAULT_NO_WORK_ALERT_CHANNEL;
+  const target = (process.env.KWF_NO_WORK_ALERT_TARGET ?? DEFAULT_NO_WORK_ALERT_TARGET).trim();
+  if (!target) {
+    return { outcome: 'first_hit_skipped', channel, reasonCode: tick.reasonCode, detail: 'missing_target' };
+  }
+
+  const message = buildNoWorkFirstHitAlertMessage(tick.reasonCode);
+
+  try {
+    await execa('openclaw', [
+      'message',
+      'send',
+      '--channel',
+      channel,
+      '--target',
+      target,
+      '--message',
+      message,
+      '--json',
+    ]);
+
+    if (params.map.noWork) {
+      params.map.noWork.firstHitAlertSentAt = new Date().toISOString();
+      params.map.noWork.firstHitAlertChannel = channel;
+      params.map.noWork.firstHitAlertTarget = target;
+    }
+
+    return {
+      outcome: 'first_hit_sent',
+      channel,
+      target,
+      message,
+      reasonCode: tick.reasonCode,
+    };
+  } catch (err: any) {
+    return {
+      outcome: 'send_error',
+      channel,
+      target,
+      message,
+      reasonCode: tick.reasonCode,
+      detail: err?.message ?? String(err),
+    };
+  }
 }
 
 export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.stdout, stderr: process.stderr }): Promise<number> {
@@ -651,6 +754,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         outcome: 'applied' | 'parse_error' | 'mutation_error';
         detail?: string;
       }> = [];
+      let noWorkAlert: NoWorkAlertResult | null = null;
 
       if (!dryRun) {
         for (const action of plan.actions) {
@@ -711,7 +815,22 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             }
           }
         }
+
+        noWorkAlert = await maybeSendNoWorkFirstHitAlert({
+          output,
+          previousMap,
+          map: plan.map,
+          dryRun,
+        });
+
         await saveSessionMap(plan.map);
+      } else {
+        noWorkAlert = await maybeSendNoWorkFirstHitAlert({
+          output,
+          previousMap,
+          map: plan.map,
+          dryRun,
+        });
       }
 
       io.stdout.write(
@@ -720,6 +839,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             dryRun,
             actions: plan.actions,
             execution,
+            noWorkAlert,
             activeTicketId: plan.activeTicketId,
             mapPath: '.tmp/kwf-session-map.json',
           },

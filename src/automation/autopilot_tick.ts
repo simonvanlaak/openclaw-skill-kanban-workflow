@@ -50,11 +50,6 @@ function isAssignedToSelf(assignees: readonly Actor[] | undefined, me: Actor): b
 }
 
 const STALE_MINUTES_FOR_BLOCK = 10;
-const COMPLETION_PROOF_MARKERS = [
-  'completed:',
-  '[done-proof]',
-  'proof:',
-];
 const BLOCKER_KEYWORDS = [
   'permission denied',
   'access denied',
@@ -80,11 +75,6 @@ function hasBlockerSignal(text: string): boolean {
   return BLOCKER_KEYWORDS.some((k) => v.includes(k));
 }
 
-function completionMarker(text: string): string | null {
-  const v = text.toLowerCase();
-  const m = COMPLETION_PROOF_MARKERS.find((k) => v.includes(k));
-  return m ?? null;
-}
 
 export async function runAutopilotTick(opts: {
   adapter: AutopilotTickPort;
@@ -154,24 +144,6 @@ export async function runAutopilotTick(opts: {
 
         // Completion decision: if recent updates include a clear completion signal,
         // advance to In Review and stop active execution.
-        const completion = recentComments
-          .map((c) => ({ c, marker: completionMarker(c.body ?? '') }))
-          .find((x) => Boolean(x.marker));
-        if (completion) {
-          const reason = 'Auto-completed: detected completion proof marker in recent updates.';
-          return {
-            kind: 'completed',
-            id: activeId,
-            reason,
-            reasonCode: 'completion_signal_strong',
-            evidence: {
-              updatedAt: active.updatedAt?.toISOString(),
-              minutesStale,
-              matchedSignal: completion.marker ?? undefined,
-            },
-          };
-        }
-
         // Blocked decision: stale ticket + blocker signal in recent comments.
         if (minutesStale > 0) {
           const blocker = recentComments.find((c) => hasBlockerSignal(c.body ?? ''));
