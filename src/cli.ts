@@ -24,15 +24,16 @@ function whatNextTipForCommand(cmd: string): string {
     case 'next':
       return 'run `kanban-workflow start --id <id>`';
     case 'start':
-      return 'run the actual execution in a subagent; then `kanban-workflow ask --id <id> --text "..."` or `kanban-workflow update --id <id> --text "..."`';
+      return 'prefer `kanban-workflow autopilot-tick` for orchestrated flow';
     case 'ask':
-      return 'run `kanban-workflow next`';
     case 'update':
-      return 'run `kanban-workflow complete --id <id> --summary "..."`';
     case 'complete':
-      return 'run `kanban-workflow next`';
+    case 'continue':
+    case 'blocked':
+    case 'completed':
+      return 'run `kanban-workflow autopilot-tick`';
     case 'autopilot-tick':
-      return 'if a ticket was started, your autopilot agent should `kanban-workflow show --id <id>` and begin work; otherwise wait and retry';
+      return 'follow the returned instruction and use only: continue, blocked, completed';
     case 'show':
     case 'create':
       return 'run `kanban-workflow next`';
@@ -48,6 +49,41 @@ function writeWhatNext(io: CliIo, cmd: string): void {
 function writeSetupRequiredError(io: CliIo): void {
   io.stderr.write('Setup not completed: missing or invalid config/kanban-workflow.json\n');
   io.stderr.write('What next: run `kanban-workflow setup`\n');
+}
+
+const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
+const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
+
+async function ensurePlaneEnvFromHelper(): Promise<void> {
+  if ((process.env.PLANE_API_KEY ?? '').trim()) return;
+
+  try {
+    const { stdout } = await execa('bash', [
+      '-lc',
+      `source ${PLANE_ENV_HELPER} >/dev/null 2>&1; printf "%s\\n%s\\n%s" "${'$'}{PLANE_API_KEY:-}" "${'$'}{PLANE_WORKSPACE:-}" "${'$'}{PLANE_BASE_URL:-}"`,
+    ]);
+
+    const [apiKey = '', workspace = '', baseUrl = ''] = stdout.split('\n');
+    if (apiKey.trim()) process.env.PLANE_API_KEY = apiKey.trim();
+    if (workspace.trim()) process.env.PLANE_WORKSPACE = workspace.trim();
+    if (baseUrl.trim()) process.env.PLANE_BASE_URL = baseUrl.trim();
+  } catch {
+    // best-effort only; adapter auth will error with actionable message if still missing
+  }
+}
+
+async function saveCurrentAutopilotId(id: string): Promise<void> {
+  await fs.mkdir('.tmp', { recursive: true });
+  await fs.writeFile(AUTOPILOT_CURRENT_ID_PATH, `${id}\n`, 'utf8');
+}
+
+async function loadCurrentAutopilotId(): Promise<string | null> {
+  try {
+    const v = (await fs.readFile(AUTOPILOT_CURRENT_ID_PATH, 'utf8')).trim();
+    return v || null;
+  } catch {
+    return null;
+  }
 }
 
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
@@ -310,6 +346,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       return 1;
     }
 
+    if (config?.adapter?.kind === 'plane') {
+      await ensurePlaneEnvFromHelper();
+    }
+
     const adapter = await adapterFromConfig(config.adapter);
 
     if (cmd === 'show') {
@@ -322,52 +362,104 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'autopilot-tick') {
       const dryRun = Boolean(flags['dry-run']);
-      const telemetryPath = String(flags['telemetry-path'] ?? '');
       const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
+
+      const buildOptions = () => ({
+        continue: {
+          command: 'kanban-workflow continue --text "update + next steps"',
+          requires: 'single text message with update + next steps',
+        },
+        blocked: {
+          command: 'kanban-workflow blocked --text "block reason + questions for humans"',
+          requires: 'single text message with blocker reason + questions',
+        },
+        completed: {
+          command: 'kanban-workflow completed --result "what was done"',
+          requires: 'result/what was done message',
+        },
+      });
 
       let output: unknown = res;
 
       if (res.kind === 'started') {
-        if (dryRun) {
-          output = { tick: res, action: 'start', dryRun: true };
-        } else {
+        if (!dryRun) {
           await start(adapter, res.id);
-          const payload = await show(adapter, res.id);
-          output = { tick: res, action: 'start', current: payload };
+          await saveCurrentAutopilotId(res.id);
         }
+        const current = await show(adapter, res.id);
+        output = {
+          tick: res,
+          nextTicket: current,
+          instruction: 'Work on this ticket now.',
+          haltOptions: buildOptions(),
+          dryRun,
+        };
+      } else if (res.kind === 'in_progress') {
+        if (!dryRun) {
+          const msg = `Progress update (autopilot): continuing work on this ticket. Decision reason: ${res.reasonCode ?? 'active_in_progress'}.`;
+          await update(adapter, res.id, msg);
+          await saveCurrentAutopilotId(res.id);
+        }
+        const current = await show(adapter, res.id);
+        output = {
+          tick: res,
+          nextTicket: current,
+          instruction: 'Continue working on this ticket now.',
+          haltOptions: buildOptions(),
+          dryRun,
+        };
       } else if (res.kind === 'blocked') {
-        if (dryRun) {
-          output = { tick: res, action: 'ask', dryRun: true };
-        } else {
+        if (!dryRun) {
           await ask(
             adapter,
             res.id,
             `${res.reason} Last activity is ${res.minutesStale} minutes old. Please resolve dependency, then move back to In Progress.`,
           );
-          const nextRes = await next(adapter);
-          output = { tick: res, action: 'ask', next: nextRes };
+        }
+        const nextRes = await next(adapter);
+        if (nextRes.kind === 'item') {
+          if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
+          output = {
+            tick: res,
+            nextTicket: nextRes,
+            instruction: 'Previous ticket is blocked. Work on this next ticket now.',
+            haltOptions: buildOptions(),
+            dryRun,
+          };
+        } else {
+          output = {
+            tick: res,
+            noWork: true,
+            instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
+            dryRun,
+          };
         }
       } else if (res.kind === 'completed') {
-        // proof gate: only strong completion signal is allowed for auto-complete branch
         if (res.reasonCode !== 'completion_signal_strong') {
-          output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed' };
-        } else if (dryRun) {
-          output = { tick: res, action: 'complete', dryRun: true };
+          output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed', dryRun };
         } else {
-          await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
+          if (!dryRun) {
+            await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
+          }
           const nextRes = await next(adapter);
-          output = { tick: res, action: 'complete', next: nextRes };
+          if (nextRes.kind === 'item') {
+            if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
+            output = {
+              tick: res,
+              nextTicket: nextRes,
+              instruction: 'Previous ticket completed. Work on this next ticket now.',
+              haltOptions: buildOptions(),
+              dryRun,
+            };
+          } else {
+            output = {
+              tick: res,
+              noWork: true,
+              instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
+              dryRun,
+            };
+          }
         }
-      }
-
-      if (telemetryPath) {
-        const row = {
-          ts: new Date().toISOString(),
-          cmd,
-          dryRun,
-          output,
-        };
-        await fs.appendFile(telemetryPath, `${JSON.stringify(row)}\n`, 'utf8');
       }
 
       io.stdout.write(`${JSON.stringify(output, null, 2)}\n`);
@@ -399,11 +491,31 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       return 0;
     }
 
+    if (cmd === 'continue') {
+      const id = String(flags.id ?? '').trim() || (await loadCurrentAutopilotId()) || '';
+      const text = String(flags.text ?? '').trim();
+      if (!id) throw new Error('continue requires active ticket context (run autopilot-tick first)');
+      if (!text) throw new Error('continue requires --text');
+      await update(adapter, id, text);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
     if (cmd === 'ask') {
       const id = String(flags.id ?? '');
       const text = String(flags.text ?? '');
       if (!id) throw new Error('ask requires --id');
       if (!text) throw new Error('ask requires --text');
+      await ask(adapter, id, text);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
+    if (cmd === 'blocked') {
+      const id = String(flags.id ?? '').trim() || (await loadCurrentAutopilotId()) || '';
+      const text = String(flags.text ?? '').trim();
+      if (!id) throw new Error('blocked requires active ticket context (run autopilot-tick first)');
+      if (!text) throw new Error('blocked requires --text');
       await ask(adapter, id, text);
       writeWhatNext(io, cmd);
       return 0;
@@ -415,6 +527,16 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       if (!id) throw new Error('complete requires --id');
       if (!summary) throw new Error('complete requires --summary');
       await complete(adapter, id, summary);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
+    if (cmd === 'completed') {
+      const id = String(flags.id ?? '').trim() || (await loadCurrentAutopilotId()) || '';
+      const result = String(flags.result ?? '').trim();
+      if (!id) throw new Error('completed requires active ticket context (run autopilot-tick first)');
+      if (!result) throw new Error('completed requires --result');
+      await complete(adapter, id, result);
       writeWhatNext(io, cmd);
       return 0;
     }

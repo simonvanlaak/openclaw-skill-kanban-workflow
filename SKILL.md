@@ -103,7 +103,6 @@ CLI entry point:
 
 Autopilot flags:
 - `kanban-workflow autopilot-tick --dry-run`
-- `kanban-workflow autopilot-tick --telemetry-path .tmp/autopilot-decisions.jsonl`
 
 ## CLI ergonomics: "What next" tips
 

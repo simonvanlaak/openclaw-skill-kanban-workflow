@@ -77,7 +77,6 @@ Adapter flags:
 Supported flags:
 
 - `--dry-run` -> evaluate decision without mutating ticket state
-- `--telemetry-path <file.jsonl>` -> append decision/output records for auditing
 
 ### Completion proof gate
 
