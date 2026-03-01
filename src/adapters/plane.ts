@@ -105,7 +105,7 @@ function extractIssueAssigneeIds(raw: unknown): string[] {
       if (a && typeof a === 'object' && (a.id != null || a.user_id != null)) return String(a.id ?? a.user_id);
       return undefined;
     })
-    .filter((x): x is string => Boolean(x && x.trim().length > 0));
+    .filter((x: string | undefined): x is string => typeof x === 'string' && x.trim().length > 0);
 }
 
 function idFromUnknown(raw: unknown): string | undefined {
@@ -402,6 +402,80 @@ export class PlaneAdapter implements Adapter {
     };
   }
 
+  async listNeedsMyAttention(): Promise<Array<{
+    id: string;
+    title: string;
+    projectId: string;
+    stage: 'stage:blocked' | 'stage:in-review';
+    url?: string;
+    updatedAt?: Date;
+  }>> {
+    const me = await this.whoami();
+    const meId = String(me.id ?? '').trim();
+    if (!meId) return [];
+
+    const out: Array<{
+      id: string;
+      title: string;
+      projectId: string;
+      stage: 'stage:blocked' | 'stage:in-review';
+      url?: string;
+      updatedAt?: Date;
+    }> = [];
+
+    for (const projectId of this.projectIds) {
+      const issuesRaw = await this.listIssuesRaw(projectId);
+      const issues = normalizePlaneIssuesList(issuesRaw);
+
+      for (const issue of issues) {
+        const stateName = extractIssueStageName(issue);
+        if (!stateName) continue;
+
+        const mappedStage = this.stageMap[stateName];
+        if (mappedStage !== 'stage:blocked' && mappedStage !== 'stage:in-review') continue;
+
+        const creatorId = extractIssueCreatorId(issue);
+        if (!creatorId || String(creatorId) !== meId) continue;
+
+        const issueId = idFromUnknown((issue as any)?.id);
+        if (!issueId) continue;
+
+        const titleRaw = (issue as any)?.name ?? (issue as any)?.title;
+        const title = String(titleRaw ?? '').trim();
+        if (!title) continue;
+
+        const updatedAtRaw = (issue as any)?.updated_at ?? (issue as any)?.updatedAt;
+        const updatedAt = updatedAtRaw != null ? parsePlaneDate(String(updatedAtRaw)) : undefined;
+
+        out.push({
+          id: issueId,
+          title,
+          projectId,
+          stage: mappedStage,
+          url: (issue as any)?.url ? String((issue as any).url) : undefined,
+          updatedAt,
+        });
+      }
+    }
+
+    out.sort((a, b) => {
+      const stageRank = (value: 'stage:blocked' | 'stage:in-review'): number =>
+        value === 'stage:blocked' ? 0 : 1;
+      const byStage = stageRank(a.stage) - stageRank(b.stage);
+      if (byStage !== 0) return byStage;
+
+      const byUpdated = (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
+      if (byUpdated !== 0) return byUpdated;
+
+      const byProject = a.projectId.localeCompare(b.projectId);
+      if (byProject !== 0) return byProject;
+
+      return a.id.localeCompare(b.id);
+    });
+
+    return out;
+  }
+
   async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
     const snap = await this.fetchSnapshot();
     return [...snap.values()]
@@ -573,7 +647,7 @@ export class PlaneAdapter implements Adapter {
       url: item.url,
       stage: item.stage.key,
       body,
-      labels: item.labels,
+      labels: [...item.labels],
       assignees: item.assignees,
       updatedAt: item.updatedAt,
     };
@@ -780,7 +854,7 @@ export class PlaneAdapter implements Adapter {
         title,
         stage,
         url: issue.url,
-        labels: issue.labels,
+        labels: [...issue.labels],
         assignees: issue.assignees,
         updatedAt: updatedAtRaw ? new Date(updatedAtRaw) : undefined,
         raw: issue,
@@ -791,8 +865,15 @@ export class PlaneAdapter implements Adapter {
   }
 
   async fetchSnapshot(): Promise<ReadonlyMap<string, WorkItem>> {
-    // Single-project snapshot (multi-project usage should call listBacklogIdsInOrder).
-    const projectId = this.projectIds[0];
-    return this.fetchSnapshotForProject(projectId);
+    const merged = new Map<string, WorkItem>();
+
+    for (const projectId of this.projectIds) {
+      const snap = await this.fetchSnapshotForProject(projectId);
+      for (const [id, item] of snap.entries()) {
+        merged.set(id, item);
+      }
+    }
+
+    return merged;
   }
 }

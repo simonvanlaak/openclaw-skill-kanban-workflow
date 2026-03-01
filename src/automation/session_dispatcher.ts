@@ -1,6 +1,25 @@
 import * as fs from 'node:fs/promises';
+import * as fsSync from 'node:fs';
+import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 export const DEFAULT_SESSION_MAP_PATH = '.tmp/kwf-session-map.json';
+
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const DEFAULT_WORKER_AGENT_MD_PATH = path.resolve(MODULE_DIR, '..', '..', 'AGENT.md');
+
+function loadWorkerAgentGuide(): string | null {
+  const overridePath = process.env.KWF_WORKER_AGENT_MD_PATH?.trim();
+  const guidePath = overridePath ? path.resolve(overridePath) : DEFAULT_WORKER_AGENT_MD_PATH;
+
+  try {
+    const raw = fsSync.readFileSync(guidePath, 'utf8').trim();
+    if (!raw) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
 
 export type SessionEntry = {
   sessionId: string;
@@ -13,6 +32,14 @@ export type SessionEntry = {
 export type SessionMap = {
   version: 1;
   active?: { ticketId: string; sessionId: string };
+  noWork?: {
+    streakStartedAt: string;
+    lastSeenAt: string;
+    reasonCode?: string;
+    firstHitAlertSentAt?: string;
+    firstHitAlertChannel?: string;
+    firstHitAlertTarget?: string;
+  };
   sessionsByTicket: Record<string, SessionEntry>;
 };
 
@@ -55,12 +82,31 @@ export async function loadSessionMap(path = DEFAULT_SESSION_MAP_PATH): Promise<S
     const parsed = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return emptyMap();
     const sessionsByTicket = parsed.sessionsByTicket && typeof parsed.sessionsByTicket === 'object' ? parsed.sessionsByTicket : {};
+    const noWork =
+      parsed.noWork && typeof parsed.noWork === 'object' && typeof parsed.noWork.streakStartedAt === 'string'
+        ? {
+            streakStartedAt: parsed.noWork.streakStartedAt,
+            lastSeenAt:
+              typeof parsed.noWork.lastSeenAt === 'string' && parsed.noWork.lastSeenAt.trim()
+                ? parsed.noWork.lastSeenAt
+                : parsed.noWork.streakStartedAt,
+            reasonCode: typeof parsed.noWork.reasonCode === 'string' ? parsed.noWork.reasonCode : undefined,
+            firstHitAlertSentAt:
+              typeof parsed.noWork.firstHitAlertSentAt === 'string' ? parsed.noWork.firstHitAlertSentAt : undefined,
+            firstHitAlertChannel:
+              typeof parsed.noWork.firstHitAlertChannel === 'string' ? parsed.noWork.firstHitAlertChannel : undefined,
+            firstHitAlertTarget:
+              typeof parsed.noWork.firstHitAlertTarget === 'string' ? parsed.noWork.firstHitAlertTarget : undefined,
+          }
+        : undefined;
+
     return {
       version: 1,
       active:
         parsed.active && typeof parsed.active.ticketId === 'string' && typeof parsed.active.sessionId === 'string'
           ? { ticketId: parsed.active.ticketId, sessionId: parsed.active.sessionId }
           : undefined,
+      noWork,
       sessionsByTicket,
     };
   } catch {
@@ -73,14 +119,59 @@ export async function saveSessionMap(map: SessionMap, path = DEFAULT_SESSION_MAP
   await fs.writeFile(path, `${JSON.stringify(map, null, 2)}\n`, 'utf8');
 }
 
-export function makeSessionId(ticketId: string, _now: Date, _ticketTitle?: string): string {
-  const cleanId = ticketId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 64);
-  return `kanban-workflow-worker-${cleanId}`;
+function sanitizeSessionToken(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^kanban-workflow-worker[-_:]*/i, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-_]+|[-_]+$/g, '')
+    .slice(0, 64);
 }
 
-export function makeSessionLabel(ticketId: string, ticketTitle?: string): string {
+function extractIssueKey(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  const match = text.toUpperCase().match(/\b[A-Z][A-Z0-9]+-\d+\b/);
+  return match?.[0];
+}
+
+function looksOpaqueTicketId(ticketId: string): boolean {
+  const trimmed = ticketId.trim();
+  if (!trimmed) return true;
+
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) {
+    return true;
+  }
+
+  if (trimmed.length >= 24 && /^[a-z0-9-]+$/i.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
+function looksLegacyWorkerSessionId(sessionId: string): boolean {
+  const trimmed = sessionId.trim();
+  if (!trimmed) return true;
+  if (/^kanban-workflow-worker[-_:]/i.test(trimmed)) return true;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(trimmed)) return true;
+  return false;
+}
+
+export function makeSessionId(ticketId: string, now: Date, _ticketTitle?: string, sessionDisplayId?: string): string {
+  const preferred = sanitizeSessionToken(sessionDisplayId ?? '');
+  if (preferred) return preferred;
+
+  const fallback = sanitizeSessionToken(ticketId);
+  if (fallback) return fallback;
+
+  return `ticket-${now.getTime()}`;
+}
+
+export function makeSessionLabel(sessionDisplayId: string, ticketTitle?: string): string {
   const cleanTitle = (ticketTitle ?? '').replace(/\s+/g, ' ').trim();
-  return cleanTitle ? `${ticketId} ${cleanTitle}` : ticketId;
+  return cleanTitle ? `${sessionDisplayId} ${cleanTitle}` : sessionDisplayId;
 }
 
 function ensureSessionForTicket(
@@ -88,17 +179,33 @@ function ensureSessionForTicket(
   ticketId: string,
   nowIso: string,
   ticketTitle?: string,
+  sessionDisplayId?: string,
 ): { sessionId: string; sessionLabel: string; reused: boolean } {
   const existing = map.sessionsByTicket[ticketId];
+  const effectiveDisplayId = sessionDisplayId || ticketId;
+  const preferredSessionId = makeSessionId(ticketId, new Date(nowIso), ticketTitle, effectiveDisplayId);
   const sessionLabel = ticketTitle
-    ? makeSessionLabel(ticketId, ticketTitle)
-    : existing?.sessionLabel || makeSessionLabel(ticketId, ticketTitle);
+    ? makeSessionLabel(effectiveDisplayId, ticketTitle)
+    : existing?.sessionLabel || makeSessionLabel(effectiveDisplayId, ticketTitle);
+
   if (existing && !existing.closedAt) {
+    let sessionId = existing.sessionId;
+    const shouldUpgradeLegacyId =
+      preferredSessionId !== sessionId &&
+      looksLegacyWorkerSessionId(sessionId) &&
+      !!sanitizeSessionToken(effectiveDisplayId) &&
+      !!extractIssueKey(effectiveDisplayId);
+
+    if (shouldUpgradeLegacyId) {
+      sessionId = preferredSessionId;
+      existing.sessionId = sessionId;
+    }
+
     existing.lastState = 'in_progress';
     existing.lastSeenAt = nowIso;
     existing.sessionLabel = sessionLabel;
-    map.active = { ticketId, sessionId: existing.sessionId };
-    return { sessionId: existing.sessionId, sessionLabel, reused: true };
+    map.active = { ticketId, sessionId };
+    return { sessionId, sessionLabel, reused: !shouldUpgradeLegacyId };
   }
 
   const active = map.active;
@@ -108,7 +215,7 @@ function ensureSessionForTicket(
     return { sessionId: active.sessionId, sessionLabel, reused: true };
   }
 
-  const sessionId = makeSessionId(ticketId, new Date(nowIso), ticketTitle);
+  const sessionId = preferredSessionId;
   map.sessionsByTicket[ticketId] = {
     sessionId,
     sessionLabel,
@@ -194,7 +301,11 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
   const item = payload?.item ?? {};
   const commentsRaw: any[] = Array.isArray(payload?.comments) ? payload.comments : [];
   const attachmentsRaw: any[] = Array.isArray(item?.attachments) ? item.attachments : [];
-  const linksRaw: any[] = Array.isArray(item?.linked) ? item.linked : [];
+  const linksRaw: any[] = [
+    ...(Array.isArray(item?.linked) ? item.linked : []),
+    ...(Array.isArray(item?.links) ? item.links : []),
+    ...(Array.isArray(payload?.links) ? payload.links : []),
+  ];
 
   const comments = commentsRaw.map((c) => ({
     at: c?.createdAt ? String(c.createdAt) : undefined,
@@ -212,7 +323,10 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
 
   const inferredFromBody = extractIssueKeyLinks(item?.body ? String(item.body) : undefined);
   const inferredFromComments = comments.flatMap((c) => extractIssueKeyLinks(c.body));
-  const inferred = [...inferredFromBody, ...inferredFromComments];
+  const inferred = [...inferredFromBody, ...inferredFromComments].map((l) => ({
+    ...l,
+    url: undefined,
+  }));
 
   const seen = new Set<string>();
   const mergedLinks = [...explicitLinks, ...inferred]
@@ -237,13 +351,65 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
   };
 }
 
+function resolveSessionDisplayId(ticketId: string, payload: any): string {
+  const ticketMatch = extractIssueKey(ticketId);
+  if (ticketMatch) return ticketMatch;
+
+  if (!looksOpaqueTicketId(ticketId)) return ticketId;
+
+  const item = payload?.item ?? {};
+  const directCandidates = [
+    item?.identifier,
+    item?.issueIdentifier,
+    item?.issue_identifier,
+    item?.issueKey,
+    item?.issue_key,
+    item?.key,
+    item?.reference,
+    item?.displayId,
+    item?.display_id,
+    item?.title,
+  ];
+
+  for (const candidate of directCandidates) {
+    const key = extractIssueKey(candidate != null ? String(candidate) : undefined);
+    if (key) return key;
+  }
+
+  const context = extractTicketContext(payload, ticketId);
+  const contextCandidates = [
+    context.id,
+    context.title,
+    context.body,
+    ...context.links.map((l) => l.title),
+    ...context.links.map((l) => l.id),
+    ...context.links.map((l) => l.url),
+  ];
+
+  for (const candidate of contextCandidates) {
+    const key = extractIssueKey(candidate != null ? String(candidate) : undefined);
+    if (key) return key;
+  }
+
+  return ticketId;
+}
+
 function buildWorkInstruction(ticketId: string, payload: any, sessionLabel: string): string {
   const context = extractTicketContext(payload, ticketId);
   const contextJson = JSON.stringify(context, null, 2);
+  const workerAgentGuide = loadWorkerAgentGuide();
 
   return [
     `DO WORK NOW on ticket ${ticketId}.`,
     `Session label: ${sessionLabel}`,
+    ...(workerAgentGuide
+      ? [
+          '',
+          'WORKER_AGENT_MD (mandatory instructions loaded at task start):',
+          workerAgentGuide,
+        ]
+      : []),
+    '',
     'Use the context JSON below as the single source of truth for this turn.',
     '',
     'Execution contract (mandatory):',
@@ -283,6 +449,10 @@ export function buildDispatcherPlan(params: {
 
   const actions: DispatchAction[] = [];
 
+  if (tickKind !== 'no_work') {
+    map.noWork = undefined;
+  }
+
   if (tickKind === 'blocked' || tickKind === 'completed') {
     const finalized = finalizeTicket(map, tick.id, tickKind, nowIso);
     if (finalized) {
@@ -297,7 +467,14 @@ export function buildDispatcherPlan(params: {
 
     if (nextTicketId) {
       const nextTicketTitle = output?.nextTicket?.item?.title ? String(output.nextTicket.item.title) : undefined;
-      const { sessionId, sessionLabel } = ensureSessionForTicket(map, nextTicketId, nowIso, nextTicketTitle);
+      const nextTicketDisplayId = resolveSessionDisplayId(nextTicketId, output?.nextTicket);
+      const { sessionId, sessionLabel } = ensureSessionForTicket(
+        map,
+        nextTicketId,
+        nowIso,
+        nextTicketTitle,
+        nextTicketDisplayId,
+      );
       actions.push({
         kind: 'work',
         sessionId,
@@ -313,7 +490,14 @@ export function buildDispatcherPlan(params: {
 
   if (currentTicketId) {
     const currentTicketTitle = activeTicketPayload?.item?.title ? String(activeTicketPayload.item.title) : undefined;
-    const { sessionId, sessionLabel } = ensureSessionForTicket(map, currentTicketId, nowIso, currentTicketTitle);
+    const currentTicketDisplayId = resolveSessionDisplayId(currentTicketId, activeTicketPayload);
+    const { sessionId, sessionLabel } = ensureSessionForTicket(
+      map,
+      currentTicketId,
+      nowIso,
+      currentTicketTitle,
+      currentTicketDisplayId,
+    );
     actions.push({
       kind: 'work',
       sessionId,
@@ -326,6 +510,15 @@ export function buildDispatcherPlan(params: {
 
   if (tickKind === 'no_work') {
     map.active = undefined;
+    const previousNoWork = map.noWork;
+    map.noWork = {
+      streakStartedAt: previousNoWork?.streakStartedAt ?? nowIso,
+      lastSeenAt: nowIso,
+      reasonCode: typeof tick?.reasonCode === 'string' ? tick.reasonCode : undefined,
+      firstHitAlertSentAt: previousNoWork?.firstHitAlertSentAt,
+      firstHitAlertChannel: previousNoWork?.firstHitAlertChannel,
+      firstHitAlertTarget: previousNoWork?.firstHitAlertTarget,
+    };
   }
 
   return { map, actions, activeTicketId: null };

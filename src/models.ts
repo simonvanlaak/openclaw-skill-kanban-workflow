@@ -10,6 +10,7 @@ export interface WorkItem {
   stage: Stage;
   url?: string;
   labels: readonly string[];
+  assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
   updatedAt?: Date;
   raw: JsonObject;
 }
@@ -25,5 +26,5 @@ export const WorkItemSchema = z.object({
   url: z.string().url().optional(),
   labels: z.array(z.string()).default([]),
   updatedAt: z.coerce.date().optional(),
-  raw: z.record(z.unknown()).default({}),
+  raw: z.record(z.string(), z.unknown()).default({}),
 });

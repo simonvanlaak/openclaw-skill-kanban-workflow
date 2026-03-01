@@ -10,9 +10,9 @@ import { execa } from 'execa';
 import { PlaneAdapter } from '../src/adapters/plane.js';
 
 type ExecaMock = typeof execa & {
-  mockResolvedValueOnce: (value: unknown) => unknown;
-  mockRejectedValueOnce: (value: unknown) => unknown;
-  mockReset: () => unknown;
+  mockResolvedValueOnce: (value: unknown) => ExecaMock;
+  mockRejectedValueOnce: (value: unknown) => ExecaMock;
+  mockReset: () => void;
 };
 
 describe('PlaneAdapter', () => {
@@ -208,6 +208,109 @@ describe('PlaneAdapter', () => {
     ]);
   });
 
+  it('reconciles creator assignment for non-backlog mapped stages', async () => {
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            {
+              id: 'i10',
+              name: 'In review, unassigned',
+              state: { name: 'In Review' },
+              assignees: [],
+              created_by: 'u10',
+            },
+            {
+              id: 'i11',
+              name: 'In review, already assigned',
+              state: { name: 'In Review' },
+              assignees: ['u11'],
+              created_by: 'u11',
+            },
+            {
+              id: 'i12',
+              name: 'Done, unmapped state',
+              state: { name: 'Done' },
+              assignees: [],
+              created_by: 'u12',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ stdout: '{}' });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:todo',
+        'In Review': 'stage:in-review',
+      },
+    });
+
+    await adapter.reconcileAssignments();
+
+    expect((execa as any).mock.calls[1]?.[1]).toEqual([
+      '-f',
+      'json',
+      'issues',
+      'assign',
+      '--project',
+      'proj',
+      'i10',
+      'u10',
+    ]);
+    expect((execa as any).mock.calls.length).toBe(2);
+  });
+
+  it('reconciles creator assignment for blocked mapped stage', async () => {
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            {
+              id: 'i20',
+              name: 'Blocked and unassigned',
+              state: { name: 'Blocked' },
+              assignees: [],
+              created_by: 'u20',
+            },
+            {
+              id: 'i21',
+              name: 'Blocked and already assigned',
+              state: { name: 'Blocked' },
+              assignees: ['u21'],
+              created_by: 'u21',
+            },
+          ],
+        }),
+      })
+      .mockResolvedValueOnce({ stdout: '{}' });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        Todo: 'stage:todo',
+        Blocked: 'stage:blocked',
+      },
+    });
+
+    await adapter.reconcileAssignments();
+
+    expect((execa as any).mock.calls[1]?.[1]).toEqual([
+      '-f',
+      'json',
+      'issues',
+      'assign',
+      '--project',
+      'proj',
+      'i20',
+      'u20',
+    ]);
+    expect((execa as any).mock.calls.length).toBe(2);
+  });
+
   it('orders backlog by priority when priorities differ', async () => {
     (execa as any as ExecaMock)
       // whoami -> me + projects list
@@ -247,6 +350,83 @@ describe('PlaneAdapter', () => {
     const ids = await adapter.listBacklogIdsInOrder();
 
     expect(ids).toEqual(['i-high', 'i-low']);
+  });
+
+  it('lists needs-my-attention issues created by the active user across projects', async () => {
+    (execa as any as ExecaMock)
+      // whoami -> me + projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // project A issues
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'a-blocked',
+            name: 'Blocked mine',
+            state: { name: 'Blocked' },
+            created_by: 'me1',
+            updated_at: '2026-02-27T09:00:00Z',
+          },
+          {
+            id: 'a-review-not-mine',
+            name: 'Review not mine',
+            state: { name: 'In Review' },
+            created_by: 'other',
+            updated_at: '2026-02-27T10:00:00Z',
+          },
+        ]),
+      })
+      // project B issues
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'b-review',
+            name: 'Review mine',
+            state_detail: { name: 'In Review' },
+            created_by_detail: { id: 'me1' },
+            updated_at: '2026-02-27T11:00:00Z',
+          },
+          {
+            id: 'b-todo',
+            name: 'Todo mine',
+            state: { name: 'Todo' },
+            created_by: 'me1',
+            updated_at: '2026-02-27T12:00:00Z',
+          },
+        ]),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectIds: ['projA', 'projB'],
+      stageMap: {
+        Todo: 'stage:todo',
+        Blocked: 'stage:blocked',
+        'In Progress': 'stage:in-progress',
+        'In Review': 'stage:in-review',
+      },
+    });
+
+    const items = await adapter.listNeedsMyAttention();
+
+    expect(items).toEqual([
+      {
+        id: 'a-blocked',
+        title: 'Blocked mine',
+        projectId: 'projA',
+        stage: 'stage:blocked',
+        url: undefined,
+        updatedAt: new Date('2026-02-27T09:00:00Z'),
+      },
+      {
+        id: 'b-review',
+        title: 'Review mine',
+        projectId: 'projB',
+        stage: 'stage:in-review',
+        url: undefined,
+        updatedAt: new Date('2026-02-27T11:00:00Z'),
+      },
+    ]);
   });
 
   it('implements setStage via plane issues update --state <id>', async () => {

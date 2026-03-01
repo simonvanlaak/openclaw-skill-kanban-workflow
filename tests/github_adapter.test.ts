@@ -13,8 +13,8 @@ import * as path from 'node:path';
 import { GitHubAdapter } from '../src/adapters/github.js';
 
 type ExecaMock = typeof execa & {
-  mockResolvedValueOnce: (value: unknown) => unknown;
-  mockReset: () => unknown;
+  mockResolvedValueOnce: (value: unknown) => ExecaMock;
+  mockReset: () => void;
 };
 
 function iso(dt: string): string {

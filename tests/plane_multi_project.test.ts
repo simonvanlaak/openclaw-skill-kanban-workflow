@@ -10,8 +10,8 @@ import { execa } from 'execa';
 import { PlaneAdapter } from '../src/adapters/plane.js';
 
 type ExecaMock = typeof execa & {
-  mockResolvedValueOnce: (value: unknown) => unknown;
-  mockReset: () => unknown;
+  mockResolvedValueOnce: (value: unknown) => ExecaMock;
+  mockReset: () => void;
 };
 
 describe('PlaneAdapter (multi-project)', () => {
@@ -61,6 +61,45 @@ describe('PlaneAdapter (multi-project)', () => {
     });
 
     // config order, not updatedAt across projects.
+    expect(ids).toEqual(['A1', 'B1']);
+  });
+
+  it('listIdsByStage reads from all configured projects', async () => {
+    (execa as any as ExecaMock)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          { id: 'A1', name: 'A1', state: { name: 'Blocked' }, updated_at: '2026-02-26T00:00:00Z' },
+        ]),
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          { id: 'B1', name: 'B1', state: { name: 'Blocked' }, updated_at: '2026-02-26T00:00:01Z' },
+        ]),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectIds: ['projA', 'projB'],
+      stageMap: {
+        Blocked: 'stage:blocked',
+        Todo: 'stage:todo',
+        Doing: 'stage:in-progress',
+        Review: 'stage:in-review',
+      },
+    });
+
+    const ids = await adapter.listIdsByStage('stage:blocked');
+
+    expect(execa).toHaveBeenNthCalledWith(1, 'plane', ['-f', 'json', 'issues', 'list', '-p', 'projA'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(execa).toHaveBeenNthCalledWith(2, 'plane', ['-f', 'json', 'issues', 'list', '-p', 'projB'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    // oldest first
     expect(ids).toEqual(['A1', 'B1']);
   });
 });

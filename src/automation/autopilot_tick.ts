@@ -50,6 +50,16 @@ function isAssignedToSelf(assignees: readonly Actor[] | undefined, me: Actor): b
 }
 
 const STALE_MINUTES_FOR_BLOCK = 10;
+const COMPLETION_KEYWORDS = [
+  'completed:',
+  'done:',
+  'finished:',
+  'implemented:',
+  'resolved:',
+  'shipped',
+  'merged',
+];
+
 const BLOCKER_KEYWORDS = [
   'permission denied',
   'access denied',
@@ -70,11 +80,10 @@ function isStale(updatedAt: Date | undefined, now: Date, thresholdMinutes: numbe
   return minutes >= thresholdMinutes ? minutes : 0;
 }
 
-function hasBlockerSignal(text: string): boolean {
+function hasSignal(text: string, keywords: string[]): boolean {
   const v = text.toLowerCase();
-  return BLOCKER_KEYWORDS.some((k) => v.includes(k));
+  return keywords.some((k) => v.includes(k));
 }
-
 
 export async function runAutopilotTick(opts: {
   adapter: AutopilotTickPort;
@@ -142,11 +151,25 @@ export async function runAutopilotTick(opts: {
           includeInternal: true,
         });
 
-        // Completion decision: if recent updates include a clear completion signal,
-        // advance to In Review and stop active execution.
+        const completion = recentComments.find((c) => hasSignal(c.body ?? '', COMPLETION_KEYWORDS));
+        if (completion) {
+          const matchedSignal = COMPLETION_KEYWORDS.find((k) => (completion.body ?? '').toLowerCase().includes(k));
+          const reason = 'Auto-complete: completion signal found in recent updates.';
+          return {
+            kind: 'completed',
+            id: activeId,
+            reason,
+            reasonCode: 'completion_signal_strong',
+            evidence: {
+              updatedAt: active.updatedAt?.toISOString(),
+              matchedSignal,
+            },
+          };
+        }
+
         // Blocked decision: stale ticket + blocker signal in recent comments.
         if (minutesStale > 0) {
-          const blocker = recentComments.find((c) => hasBlockerSignal(c.body ?? ''));
+          const blocker = recentComments.find((c) => hasSignal(c.body ?? '', BLOCKER_KEYWORDS));
           if (blocker) {
             const reason = 'Auto-blocked: stale in-progress item with blocker signal in recent updates.';
             return {

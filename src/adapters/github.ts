@@ -351,12 +351,12 @@ export class GitHubAdapter implements Adapter {
     const parsed = out.trim().length > 0 ? JSON.parse(out) : {};
     const body = typeof parsed.body === 'string' ? parsed.body : '';
 
-    const urls = (body.match(/https:\/\/github\.com\/user-attachments\/[\w\-./?%#=]+/g) ?? [])
-      .map((u) => u.replace(/[)"'>\]]+$/, ''));
+    const rawUrls: string[] = body.match(/https:\/\/github\.com\/user-attachments\/[\w\-./?%#=]+/g) ?? [];
+    const urls: string[] = rawUrls.map((value: string) => String(value).replace(/[)"'>\]]+$/, ''));
 
-    const uniq = Array.from(new Set(urls));
+    const uniq: string[] = Array.from(new Set(urls));
 
-    return uniq.map((url) => {
+    return uniq.map((url: string) => {
       const clean = url.split('?')[0];
       const parts = clean.split('/').filter(Boolean);
       const last = parts[parts.length - 1] ?? 'attachment';

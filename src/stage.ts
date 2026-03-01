@@ -23,7 +23,7 @@ function slug(input: string): string {
 export class Stage {
   readonly key: StageKey;
 
-  private constructor(key: StageKey) {
+  constructor(key: StageKey) {
     this.key = key;
   }
 
@@ -56,4 +56,4 @@ export const StageSchema = z
   .object({
     key: StageKeySchema,
   })
-  .transform((obj) => new Stage(obj.key));
+  .transform((obj) => Stage.fromAny(obj.key));

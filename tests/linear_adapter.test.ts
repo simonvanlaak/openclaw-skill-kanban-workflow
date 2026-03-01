@@ -11,9 +11,9 @@ import { execa } from 'execa';
 import { LinearAdapter } from '../src/adapters/linear.js';
 
 type ExecaMock = typeof execa & {
-  mockResolvedValueOnce: (value: unknown) => unknown;
-  mockReset: () => unknown;
-  mockImplementationOnce: (fn: any) => unknown;
+  mockResolvedValueOnce: (value: unknown) => ExecaMock;
+  mockImplementationOnce: (fn: any) => ExecaMock;
+  mockReset: () => void;
 };
 
 describe('LinearAdapter', () => {

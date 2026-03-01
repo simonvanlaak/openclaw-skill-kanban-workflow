@@ -47,6 +47,7 @@ import { runCli } from '../src/cli.js';
 import { loadConfigFromFile } from '../src/config.js';
 import { runSetup } from '../src/setup.js';
 import { next as nextVerb, start as startVerb } from '../src/verbs/verbs.js';
+import { PlaneAdapter } from '../src/adapters/plane.js';
 
 type IoCapture = { out: string[]; err: string[] };
 
@@ -95,6 +96,46 @@ describe('cli what-next tips', () => {
     expect(runSetup).toHaveBeenCalledOnce();
     expect(cap.out.join('')).toMatch(/Wrote config\/kanban-workflow\.json/);
     expect(cap.out.join('')).toMatch(/What next: run `kanban-workflow next`/);
+  });
+
+  it('returns needs-my-attention results for plane adapter', async () => {
+    const { io, cap } = createIo();
+
+    vi.mocked(loadConfigFromFile).mockResolvedValueOnce({
+      version: 1,
+      adapter: { kind: 'plane', workspaceSlug: 'ws', projectId: 'projA', stageMap: { Todo: 'stage:todo' } },
+    } as any);
+
+    const fakeAdapter = {
+      listNeedsMyAttention: vi.fn(async () => [
+        {
+          id: 'p1',
+          title: 'Blocked by me',
+          projectId: 'projA',
+          stage: 'stage:blocked',
+        },
+      ]),
+    } as any;
+
+    vi.mocked(PlaneAdapter).mockReturnValueOnce(fakeAdapter);
+
+    const code = await runCli(['needs-my-attention'], io);
+
+    expect(code).toBe(0);
+    expect(fakeAdapter.listNeedsMyAttention).toHaveBeenCalledOnce();
+
+    const out = cap.out.join('');
+    const payload = out.substring(0, out.indexOf('What next:')).trim();
+    const parsed = JSON.parse(payload);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed).toEqual([
+      {
+        id: 'p1',
+        title: 'Blocked by me',
+        projectId: 'projA',
+        stage: 'stage:blocked',
+      },
+    ]);
   });
 
   it('prints a what-next tip after next', async () => {

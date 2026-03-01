@@ -85,8 +85,9 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
 - dispatcher responsibilities
   - persist ticket->session state in `.tmp/kwf-session-map.json`
   - reuse the same OpenClaw worker session key while the same ticket stays `in_progress`
-  - route worker turns via `openclaw gateway call agent` with `sessionKey=agent:<worker-agent-id>:kanban-workflow-worker-<ticket-id>`
+  - route worker turns via `openclaw gateway call agent` with `sessionKey=agent:<worker-agent-id>:<ticket-session-id>` where `<ticket-session-id>` is compact and human-readable when a key like `JULES-177` is available
   - dispatch a **do-work-now** payload with full context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
+  - load `AGENT.md` (repo root) into each worker task-start payload as mandatory runtime guidance
   - enforce strict worker contract before any mutation is applied
   - emit machine-readable execution records (`applied` | `parse_error` | `mutation_error`) for observability
 - worker responsibilities
@@ -105,10 +106,11 @@ Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick
   - no-work ticks emit no worker dispatch actions; first no-work hit in a streak sends a Rocket.Chat alert to `simon.vanlaak` (configurable via env)
   - restart-safe map loading (invalid/missing map falls back to empty state)
 
-`setup --autopilot-install-cron` now installs a minimal cron trigger message:
+`setup --autopilot-install-cron` currently installs an OpenClaw message-based cron trigger that calls cron-dispatch. For token-free dispatcher runs, prefer this repo-local script:
 
-- `kanban-workflow cron-dispatch`
+- `/root/.openclaw/workspace/skills/kanban-workflow/scripts/dispatcher-cron.sh` (runs `kanban-workflow cron-dispatch --agent kanban-workflow-worker` every 5 minutes)
 
+The OpenClaw cron job used for dispatcher runs has been disabled in favor of this system job.
 ### Completion policy
 
 Auto-complete from comment markers is disabled.

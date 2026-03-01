@@ -33,6 +33,9 @@ describe('session dispatcher', () => {
     expect(first.actions[0]?.sessionLabel).toBe('A1 Fix login race');
     expect(first.actions[0]?.text).toContain('DO WORK NOW on ticket A1.');
     expect(first.actions[0]?.text).toContain('Session label: A1 Fix login race');
+    expect(first.actions[0]?.text).toContain('WORKER_AGENT_MD (mandatory instructions loaded at task start):');
+    expect(first.actions[0]?.text).toContain('## 2) Plane skill usage (required when task touches Plane)');
+    expect(first.actions[0]?.text).toContain('must be stored on Nextcloud');
     expect(first.actions[0]?.text).toContain('kanban-workflow continue --text');
     expect(first.actions[0]?.text).toContain('kanban-workflow blocked --text');
     expect(first.actions[0]?.text).toContain('kanban-workflow completed --result');
@@ -94,6 +97,84 @@ describe('session dispatcher', () => {
     expect(second.actions[0]?.text).toContain('Session label: A1 New title after grooming');
   });
 
+  it('uses linked human-readable issue keys for worker session id + label', () => {
+    const plan = buildDispatcherPlan({
+      previousMap: { version: 1 as const, sessionsByTicket: {} },
+      now: new Date('2026-02-28T14:10:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: '45a8585d-9075-44de-bcd2-196e6793979a', inProgressIds: ['45a8585d-9075-44de-bcd2-196e6793979a'] },
+        nextTicket: {
+          kind: 'item',
+          item: {
+            id: '45a8585d-9075-44de-bcd2-196e6793979a',
+            title: 'Improve kwf worker session naming',
+            linked: [{ title: 'JULES-177', relation: 'mentioned' }],
+          },
+        },
+      },
+    });
+
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.actions[0]?.sessionLabel).toBe('JULES-177 Improve kwf worker session naming');
+    expect(plan.actions[0]?.text).toContain('Session label: JULES-177 Improve kwf worker session naming');
+  });
+
+  it('extracts issue keys from top-level links when adapter emits links outside item.linked', () => {
+    const plan = buildDispatcherPlan({
+      previousMap: { version: 1 as const, sessionsByTicket: {} },
+      now: new Date('2026-02-28T14:11:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: '45a8585d-9075-44de-bcd2-196e6793979a', inProgressIds: ['45a8585d-9075-44de-bcd2-196e6793979a'] },
+        nextTicket: {
+          kind: 'item',
+          item: {
+            id: '45a8585d-9075-44de-bcd2-196e6793979a',
+            title: 'Improve kwf worker session naming',
+          },
+          links: [{ title: 'JULES-177', relation: 'mentioned' }],
+        },
+      },
+    });
+
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.actions[0]?.sessionLabel).toBe('JULES-177 Improve kwf worker session naming');
+  });
+
+  it('upgrades legacy worker session ids to human-readable keys when available', () => {
+    const plan = buildDispatcherPlan({
+      previousMap: {
+        version: 1 as const,
+        active: {
+          ticketId: '45a8585d-9075-44de-bcd2-196e6793979a',
+          sessionId: 'kanban-workflow-worker-7e034eda-9929-4fe6-80ee-94c46cc55b37',
+        },
+        sessionsByTicket: {
+          '45a8585d-9075-44de-bcd2-196e6793979a': {
+            sessionId: 'kanban-workflow-worker-7e034eda-9929-4fe6-80ee-94c46cc55b37',
+            lastState: 'in_progress' as const,
+            lastSeenAt: '2026-02-28T14:10:00.000Z',
+          },
+        },
+      },
+      now: new Date('2026-02-28T14:12:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: '45a8585d-9075-44de-bcd2-196e6793979a', inProgressIds: ['45a8585d-9075-44de-bcd2-196e6793979a'] },
+        nextTicket: {
+          kind: 'item',
+          item: {
+            id: '45a8585d-9075-44de-bcd2-196e6793979a',
+            title: 'Improve kwf worker session naming',
+            linked: [{ title: 'JULES-177', relation: 'mentioned' }],
+          },
+        },
+      },
+    });
+
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.map.active?.sessionId).toBe('jules-177');
+    expect(plan.map.sessionsByTicket['45a8585d-9075-44de-bcd2-196e6793979a']?.sessionId).toBe('jules-177');
+  });
+
   it('switches ticket on blocked transition with finalize + new work action', () => {
     const seededMap = {
       version: 1 as const,
@@ -136,6 +217,26 @@ describe('session dispatcher', () => {
     expect(plan.actions).toEqual([]);
     expect(plan.activeTicketId).toBeNull();
     expect(plan.map.active).toBeUndefined();
+    expect(plan.map.noWork?.streakStartedAt).toBe('2026-02-28T13:20:00.000Z');
+    expect(plan.map.noWork?.lastSeenAt).toBe('2026-02-28T13:20:00.000Z');
+  });
+
+  it('keeps same no-work streak start across repeated no-work ticks', () => {
+    const first = buildDispatcherPlan({
+      previousMap: { version: 1 as const, sessionsByTicket: {} },
+      now: new Date('2026-02-28T13:20:00.000Z'),
+      autopilotOutput: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
+    });
+
+    const second = buildDispatcherPlan({
+      previousMap: first.map,
+      now: new Date('2026-02-28T13:25:00.000Z'),
+      autopilotOutput: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
+    });
+
+    expect(second.map.noWork?.streakStartedAt).toBe('2026-02-28T13:20:00.000Z');
+    expect(second.map.noWork?.lastSeenAt).toBe('2026-02-28T13:25:00.000Z');
+    expect(second.map.noWork?.reasonCode).toBe('no_backlog_assigned');
   });
 
   it('applies worker command back into session map state', () => {

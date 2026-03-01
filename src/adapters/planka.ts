@@ -86,7 +86,7 @@ export class PlankaAdapter implements Adapter {
       url: item.url,
       stage: item.stage.key,
       body: undefined,
-      labels: item.labels,
+      labels: [...item.labels],
       updatedAt: item.updatedAt,
     };
   }
@@ -157,7 +157,7 @@ export class PlankaAdapter implements Adapter {
         title: card.name,
         stage,
         url: card.url,
-        labels: card.labels,
+        labels: [...card.labels],
         updatedAt: card.updatedAt ? new Date(card.updatedAt) : undefined,
         raw: card,
       });

@@ -1,4 +1,5 @@
 import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import { execa } from 'execa';
@@ -20,6 +21,7 @@ import {
   type SessionMap,
 } from './automation/session_dispatcher.js';
 import { extractWorkerTerminalCommand, validateWorkerResponseContract, type WorkerTerminalCommand } from './automation/worker_contract.js';
+import { StageKeySchema } from './stage.js';
 import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
 
 export { extractWorkerTerminalCommand } from './automation/worker_contract.js';
@@ -49,6 +51,7 @@ function whatNextTipForCommand(cmd: string): string {
       return 'follow the returned instruction and use only: continue, blocked, completed';
     case 'show':
     case 'create':
+    case 'needs-my-attention':
       return 'run `kanban-workflow next`';
     default:
       return 'run `kanban-workflow next`';
@@ -64,6 +67,14 @@ function writeSetupRequiredError(io: CliIo): void {
   io.stderr.write('What next: run `kanban-workflow setup`\n');
 }
 
+function setupFsCompat(): { readFile(path: string, encoding: 'utf-8'): Promise<string>; writeFile(path: string, content: string, encoding: 'utf-8'): Promise<void>; mkdir(path: string, opts: { recursive: boolean }): Promise<void> } {
+  return {
+    readFile: (path, encoding) => fs.readFile(path, encoding),
+    writeFile: (path, content, encoding) => fs.writeFile(path, content, encoding),
+    mkdir: (path, opts) => fs.mkdir(path, opts).then(() => undefined),
+  };
+}
+
 
 function writeHelp(io: CliIo): void {
   io.stdout.write(
@@ -76,6 +87,7 @@ function writeHelp(io: CliIo): void {
       '  kanban-workflow cron-dispatch [--dry-run] [--agent <id>] [--thinking <level>]',
       '  kanban-workflow enforce-runtime',
       '  kanban-workflow show --id <ticket-id>',
+      '  kanban-workflow needs-my-attention',
       '  kanban-workflow next',
       '',
       'Execution commands (no --id required; uses active ticket context):',
@@ -90,12 +102,37 @@ function writeHelp(io: CliIo): void {
   );
 }
 
+type NeedsMyAttentionPort = {
+  listNeedsMyAttention?: () => Promise<Array<{
+    id: string;
+    title: string;
+    projectId: string;
+    stage: 'stage:blocked' | 'stage:in-review';
+    url?: string;
+    updatedAt?: Date;
+  }>>;
+};
+
 const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
 const DISPATCHER_AGENT_ID = 'kanban-workflow-dispatcher';
 const WORKER_AGENT_ID = 'kanban-workflow-worker';
 const DEFAULT_NO_WORK_ALERT_CHANNEL = 'rocketchat';
 const DEFAULT_NO_WORK_ALERT_TARGET = 'simon.vanlaak';
+const WORKER_DELEGATION_DIR = '.tmp/kwf-worker-delegations';
+const DEFAULT_WORKER_SYNC_TIMEOUT_MS = 30_000;
+const DEFAULT_WORKER_BACKGROUND_TIMEOUT_MS = 15 * 60_000;
+
+function isBackgroundWorkerDelegationAllowed(agentId: string): boolean {
+  // Background delegation produces a visible “No final worker response after …” notice.
+  // That behavior is acceptable for the human-facing dispatcher, but it is too noisy for
+  // per-ticket worker turns (it ends up as spammy comments on the work item).
+  if (agentId === DISPATCHER_AGENT_ID) return true;
+  if (agentId === WORKER_AGENT_ID) return false;
+
+  // Default: disabled. (If we ever need it for other agents, add an explicit allowlist.)
+  return false;
+}
 
 async function ensurePlaneEnvFromHelper(): Promise<void> {
   if ((process.env.PLANE_API_KEY ?? '').trim()) return;
@@ -276,41 +313,77 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
 }
 
 function makeWorkerSessionKey(agentId: string, workerSessionId: string): string {
-  return `agent:${agentId}:${workerSessionId.toLowerCase()}`;
+  const normalizedAgent = agentId.trim().toLowerCase();
+  const normalizedSession = workerSessionId.trim().toLowerCase();
+  const withoutPrefix = normalizedSession
+    .replace(new RegExp(`^agent:${normalizedAgent}:`, 'i'), '')
+    .replace(new RegExp(`^${normalizedAgent}[-_:]+`, 'i'), '')
+    .replace(/^kanban-workflow-worker[-_:]+/i, '');
+  const sessionPart = withoutPrefix || normalizedSession || 'session';
+  return `agent:${normalizedAgent}:${sessionPart}`;
 }
 
-async function dispatchWorkerTurn(params: {
-  agentId: string;
+type DispatchWorkerTurnResult =
+  | { kind: 'immediate'; workerOutput: string; raw: string }
+  | { kind: 'delegated'; notice: string };
+
+type WorkerDelegationMeta = {
+  ticketId: string;
   sessionId: string;
-  text: string;
+  agentId: string;
   thinking: string;
-}): Promise<{ workerOutput: string; raw: string }> {
-  const payload = {
-    idempotencyKey: randomUUID(),
-    message: params.text,
-    agentId: params.agentId,
-    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
-    thinking: params.thinking,
+  startedAt: string;
+  syncTimeoutMs: number;
+  backgroundTimeoutMs: number;
+};
+
+type WorkerDelegationState =
+  | { kind: 'none' }
+  | { kind: 'running'; meta: WorkerDelegationMeta }
+  | { kind: 'completed'; meta: WorkerDelegationMeta; workerOutput: string; raw: string };
+
+function resolvePositiveTimeoutMs(raw: string | undefined, fallback: number): number {
+  const n = Number(raw ?? '');
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function workerDelegationPaths(sessionId: string): {
+  dir: string;
+  payloadPath: string;
+  resultPath: string;
+  stderrPath: string;
+  exitCodePath: string;
+  donePath: string;
+  metaPath: string;
+} {
+  const safeSession = sessionId.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 120) || 'session';
+  const dir = path.join(WORKER_DELEGATION_DIR, safeSession);
+  return {
+    dir,
+    payloadPath: path.join(dir, 'payload.json'),
+    resultPath: path.join(dir, 'result.json'),
+    stderrPath: path.join(dir, 'stderr.log'),
+    exitCodePath: path.join(dir, 'exit.code'),
+    donePath: path.join(dir, 'done'),
+    metaPath: path.join(dir, 'meta.json'),
   };
+}
 
-  const gatewayTimeoutMsRaw = Number(process.env.KWF_GATEWAY_TIMEOUT_MS ?? '120000');
-  const gatewayTimeoutMs = Number.isFinite(gatewayTimeoutMsRaw) && gatewayTimeoutMsRaw > 0
-    ? Math.floor(gatewayTimeoutMsRaw)
-    : 120000;
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-  const run = await execa('openclaw', [
-    'gateway',
-    'call',
-    'agent',
-    '--expect-final',
-    '--json',
-    '--timeout',
-    String(gatewayTimeoutMs),
-    '--params',
-    JSON.stringify(payload),
-  ]);
-
-  const raw = String(run.stdout ?? '').trim();
+function parseWorkerOutputFromGatewayCall(stdoutRaw: unknown, stderrRaw: unknown): { workerOutput: string; raw: string } {
+  const raw = String(stdoutRaw ?? '').trim();
   let workerOutput = raw;
 
   try {
@@ -325,7 +398,233 @@ async function dispatchWorkerTurn(params: {
     // fallback to raw stdout
   }
 
-  return { workerOutput: `${workerOutput}\n${run.stderr ?? ''}`, raw };
+  const stderr = String(stderrRaw ?? '').trim();
+  const combined = [workerOutput.trim(), stderr].filter((x) => x.length > 0).join('\n');
+  return { workerOutput: combined, raw };
+}
+
+function collectErrText(err: unknown): string {
+  if (!err || typeof err !== 'object') return String(err ?? '');
+  const e = err as Record<string, unknown>;
+  return [e.message, e.shortMessage, e.stderr, e.stdout, e.all]
+    .map((v) => String(v ?? ''))
+    .join('\n');
+}
+
+function hasTimedOutFallbackMessage(text: string): boolean {
+  const lower = text.toLowerCase();
+  return lower.includes('request timed out before a response was generated') || lower.includes('llm request timed out');
+}
+
+function isRequestTimeoutErr(err: unknown): boolean {
+  const text = collectErrText(err).toLowerCase();
+  return text.includes('request timed out') || text.includes('llm request timed out') || text.includes('timeout');
+}
+
+function buildDelegationNotice(params: { ticketId: string; text: string; syncTimeoutMs: number; sessionId: string }): string {
+  const seconds = Math.max(1, Math.round(params.syncTimeoutMs / 1000));
+  const rawText = params.text.trim();
+  const compactText = rawText.length > 1800 ? `${rawText.slice(0, 1800).trimEnd()}...` : rawText;
+
+  return [
+    `No final worker response after ${seconds}s for ticket ${params.ticketId}. Re-dispatching this ticket in background with full context to continue execution.`,
+    '',
+    'RESUME_CONTEXT',
+    `sessionId: ${params.sessionId}`,
+    compactText,
+  ].join('\n');
+}
+
+async function startWorkerDelegation(params: {
+  ticketId: string;
+  agentId: string;
+  sessionId: string;
+  text: string;
+  thinking: string;
+  syncTimeoutMs: number;
+}): Promise<void> {
+  const payload = {
+    idempotencyKey: randomUUID(),
+    message: params.text,
+    agentId: params.agentId,
+    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
+    thinking: params.thinking,
+  };
+
+  const backgroundTimeoutMs = resolvePositiveTimeoutMs(
+    process.env.KWF_WORKER_BACKGROUND_TIMEOUT_MS,
+    DEFAULT_WORKER_BACKGROUND_TIMEOUT_MS,
+  );
+
+  const paths = workerDelegationPaths(params.sessionId);
+  const meta: WorkerDelegationMeta = {
+    ticketId: params.ticketId,
+    sessionId: params.sessionId,
+    agentId: params.agentId,
+    thinking: params.thinking,
+    startedAt: new Date().toISOString(),
+    syncTimeoutMs: params.syncTimeoutMs,
+    backgroundTimeoutMs,
+  };
+
+  await fs.mkdir(paths.dir, { recursive: true });
+  await Promise.all([
+    fs.writeFile(paths.payloadPath, `${JSON.stringify(payload)}\n`, 'utf8'),
+    fs.writeFile(paths.metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8'),
+  ]);
+
+  const script = [
+    'set +e',
+    `openclaw gateway call agent --expect-final --json --timeout ${backgroundTimeoutMs} --params "$(cat ${shellQuote(paths.payloadPath)})" > ${shellQuote(paths.resultPath)} 2> ${shellQuote(paths.stderrPath)}`,
+    'status=$?',
+    `printf "%s\\n" "$status" > ${shellQuote(paths.exitCodePath)}`,
+    `touch ${shellQuote(paths.donePath)}`,
+  ].join('\n');
+
+  const detached: any = execa('bash', ['-lc', script], { detached: true, stdio: 'ignore' } as any);
+  if (typeof detached?.unref === 'function') detached.unref();
+  if (typeof detached?.catch === 'function') {
+    detached.catch(() => undefined);
+  }
+}
+
+async function clearWorkerDelegation(sessionId: string): Promise<void> {
+  const paths = workerDelegationPaths(sessionId);
+  await fs.rm(paths.dir, { recursive: true, force: true });
+}
+
+async function loadWorkerDelegationState(sessionId: string, ticketId: string): Promise<WorkerDelegationState> {
+  const paths = workerDelegationPaths(sessionId);
+  if (!(await fileExists(paths.metaPath))) return { kind: 'none' };
+
+  let meta: WorkerDelegationMeta;
+  try {
+    meta = JSON.parse(await fs.readFile(paths.metaPath, 'utf8')) as WorkerDelegationMeta;
+  } catch {
+    await clearWorkerDelegation(sessionId);
+    return { kind: 'none' };
+  }
+
+  if (meta.ticketId !== ticketId) {
+    await clearWorkerDelegation(sessionId);
+    return { kind: 'none' };
+  }
+
+  if (!(await fileExists(paths.donePath))) {
+    // Self-heal: if the background delegation never produced a done marker,
+    // avoid getting stuck in a permanent "delegated_running" state.
+    const startedAtMs = Date.parse(meta.startedAt);
+    const graceMs = 60_000;
+    if (!Number.isFinite(startedAtMs)) {
+      await clearWorkerDelegation(sessionId);
+      return { kind: 'none' };
+    }
+
+    const deadlineMs = startedAtMs + meta.backgroundTimeoutMs + graceMs;
+    if (Date.now() > deadlineMs) {
+      await clearWorkerDelegation(sessionId);
+      return { kind: 'none' };
+    }
+
+    return { kind: 'running', meta };
+  }
+
+  const stdoutRaw = await fs.readFile(paths.resultPath, 'utf8').catch(() => '');
+  const stderrRaw = await fs.readFile(paths.stderrPath, 'utf8').catch(() => '');
+  const parsed = parseWorkerOutputFromGatewayCall(stdoutRaw, stderrRaw);
+  await clearWorkerDelegation(sessionId);
+
+  return {
+    kind: 'completed',
+    meta,
+    workerOutput: parsed.workerOutput,
+    raw: parsed.raw,
+  };
+}
+
+async function dispatchWorkerTurn(params: {
+  ticketId: string;
+  agentId: string;
+  sessionId: string;
+  text: string;
+  thinking: string;
+}): Promise<DispatchWorkerTurnResult> {
+  const payload = {
+    idempotencyKey: randomUUID(),
+    message: params.text,
+    agentId: params.agentId,
+    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
+    thinking: params.thinking,
+  };
+
+  const syncTimeoutMs = resolvePositiveTimeoutMs(process.env.KWF_WORKER_SYNC_TIMEOUT_MS, DEFAULT_WORKER_SYNC_TIMEOUT_MS);
+  const allowBackgroundDelegation = isBackgroundWorkerDelegationAllowed(params.agentId);
+
+  try {
+    const run = await execa('openclaw', [
+      'gateway',
+      'call',
+      'agent',
+      '--expect-final',
+      '--json',
+      '--timeout',
+      String(syncTimeoutMs),
+      '--params',
+      JSON.stringify(payload),
+    ]);
+
+    const parsed = parseWorkerOutputFromGatewayCall(run.stdout, run.stderr);
+    if (hasTimedOutFallbackMessage(parsed.workerOutput) || hasTimedOutFallbackMessage(parsed.raw)) {
+      if (!allowBackgroundDelegation) {
+        return { kind: 'immediate', workerOutput: '', raw: '' };
+      }
+
+      await startWorkerDelegation({
+        ticketId: params.ticketId,
+        agentId: params.agentId,
+        sessionId: params.sessionId,
+        text: params.text,
+        thinking: params.thinking,
+        syncTimeoutMs,
+      });
+      return {
+        kind: 'delegated',
+        notice: buildDelegationNotice({
+          ticketId: params.ticketId,
+          text: params.text,
+          syncTimeoutMs,
+          sessionId: params.sessionId,
+        }),
+      };
+    }
+
+    return { kind: 'immediate', workerOutput: parsed.workerOutput, raw: parsed.raw };
+  } catch (err) {
+    if (!isRequestTimeoutErr(err)) throw err;
+
+    if (!allowBackgroundDelegation) {
+      return { kind: 'immediate', workerOutput: '', raw: '' };
+    }
+
+    await startWorkerDelegation({
+      ticketId: params.ticketId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      text: params.text,
+      thinking: params.thinking,
+      syncTimeoutMs,
+    });
+
+    return {
+      kind: 'delegated',
+      notice: buildDelegationNotice({
+        ticketId: params.ticketId,
+        text: params.text,
+        syncTimeoutMs,
+        sessionId: params.sessionId,
+      }),
+    };
+  }
 }
 
 type NoWorkAlertResult = {
@@ -444,7 +743,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         throw new Error('setup requires all stage mappings: --map-backlog, --map-blocked, --map-in-progress, --map-in-review');
       }
 
-      const stageMap: Record<string, string> = {
+      const stageMap: Record<string, import('./stage.js').StageKey> = {
         [mapBacklog]: 'stage:todo',
         [mapBlocked]: 'stage:blocked',
         [mapInProgress]: 'stage:in-progress',
@@ -560,14 +859,16 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       const autopilotCronExpr = String(flags['autopilot-cron-expr'] ?? '*/5 * * * *').trim();
       const autopilotTz = flags['autopilot-cron-tz'] ? String(flags['autopilot-cron-tz']).trim() : undefined;
-      const autopilotRequeueTargetStage = String(flags['autopilot-requeue-target-stage'] ?? 'stage:todo').trim();
-      if (!['stage:todo', 'stage:blocked', 'stage:in-progress', 'stage:in-review'].includes(autopilotRequeueTargetStage)) {
-        throw new Error('setup --autopilot-requeue-target-stage must be one of: stage:todo, stage:blocked, stage:in-progress, stage:in-review');
-      }
       const autopilotInstallCron = Boolean(flags['autopilot-install-cron']);
 
+      const autopilotRequeueTargetStage = StageKeySchema.safeParse(String(flags['autopilot-requeue-target-stage'] ?? 'stage:todo').trim());
+
+      if (!autopilotRequeueTargetStage.success) {
+        throw new Error('setup --autopilot-requeue-target-stage must be one of: stage:todo, stage:blocked, stage:in-progress, stage:in-review');
+      }
+
       await runSetup({
-        fs,
+        fs: setupFsCompat(),
         configPath,
         force,
         config: {
@@ -575,7 +876,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           autopilot: {
             cronExpr: autopilotCronExpr,
             tz: autopilotTz || undefined,
-            requeueTargetStage: autopilotRequeueTargetStage as import('./stage.js').StageKey,
+            requeueTargetStage: autopilotRequeueTargetStage.data,
           },
           adapter: adapterCfg,
         },
@@ -611,7 +912,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       io.stdout.write(`Wrote ${configPath}\n`);
       io.stdout.write(
-        `Autopilot suggestion: schedule an OpenClaw cron job (expr: ${autopilotCronExpr}${autopilotTz ? `, tz: ${autopilotTz}` : ''}) to run \`npm run -s kanban-workflow -- cron-dispatch --agent ${WORKER_AGENT_ID}\` in /root/.openclaw/workspace/skills/kanban-workflow.\n`,
+        `Autopilot suggestion: for token-free dispatching, schedule this system cron command every ${autopilotCronExpr}: /root/.openclaw/workspace/skills/kanban-workflow/scripts/dispatcher-cron.sh (runs kanban-workflow cron-dispatch).\n`,
+      );
+      io.stdout.write(
+        `Alternative (legacy): OpenClaw-agent mode can be installed with \`npm run -s kanban-workflow -- cron-dispatch --agent ${WORKER_AGENT_ID}\` in /root/.openclaw/workspace/skills/kanban-workflow.\n`,
       );
 
       if (autopilotInstallCron) {
@@ -711,7 +1015,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     let config: any;
     try {
-      config = await loadConfigFromFile({ fs, path: configPath });
+      config = await loadConfigFromFile({ fs: setupFsCompat(), path: configPath });
     } catch {
       writeSetupRequiredError(io);
       return 1;
@@ -728,6 +1032,17 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const id = String(flags.id ?? '');
       if (!id) throw new Error('show requires --id');
       io.stdout.write(`${JSON.stringify(await show(adapter, id), null, 2)}\n`);
+      writeWhatNext(io, cmd);
+      return 0;
+    }
+
+    if (cmd === 'needs-my-attention') {
+      const support = adapter as NeedsMyAttentionPort;
+      if (typeof support.listNeedsMyAttention !== 'function') {
+        throw new Error('needs-my-attention is currently supported only by the plane adapter');
+      }
+
+      io.stdout.write(`${JSON.stringify(await support.listNeedsMyAttention(), null, 2)}\n`);
       writeWhatNext(io, cmd);
       return 0;
     }
@@ -751,69 +1066,112 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         ticketId: string;
         parsed: WorkerTerminalCommand | null;
         workerOutput: string;
-        outcome: 'applied' | 'parse_error' | 'mutation_error';
+        outcome: 'applied' | 'parse_error' | 'mutation_error' | 'delegated_started' | 'delegated_running';
         detail?: string;
       }> = [];
       let noWorkAlert: NoWorkAlertResult | null = null;
+
+      const applyWorkerOutput = async (action: { sessionId: string; ticketId: string }, workerOutput: string, detailPrefix?: string): Promise<void> => {
+        const contract = validateWorkerResponseContract(workerOutput);
+        const parsed = contract.command;
+
+        if (!contract.ok || !parsed) {
+          execution.push({
+            sessionId: action.sessionId,
+            ticketId: action.ticketId,
+            parsed,
+            workerOutput,
+            outcome: 'parse_error',
+            detail: contract.violations.join(' '),
+          });
+          return;
+        }
+
+        try {
+          if (parsed.kind === 'continue') {
+            await update(adapter, action.ticketId, parsed.text);
+          } else if (parsed.kind === 'blocked') {
+            await ask(adapter, action.ticketId, parsed.text);
+          } else {
+            await complete(adapter, action.ticketId, parsed.result);
+          }
+
+          applyWorkerCommandToSessionMap(plan.map, action.ticketId, parsed, new Date());
+          const evidence = `evidence.present=${String(contract.evidence.present)} evidence.concrete=${String(contract.evidence.hasConcreteExecution)}`;
+          execution.push({
+            sessionId: action.sessionId,
+            ticketId: action.ticketId,
+            parsed,
+            workerOutput,
+            outcome: 'applied',
+            detail: detailPrefix ? `${detailPrefix}; ${evidence}` : evidence,
+          });
+        } catch (err: any) {
+          execution.push({
+            sessionId: action.sessionId,
+            ticketId: action.ticketId,
+            parsed,
+            workerOutput,
+            outcome: 'mutation_error',
+            detail: err?.message ?? String(err),
+          });
+          throw err;
+        }
+      };
 
       if (!dryRun) {
         for (const action of plan.actions) {
           const effectiveAgent = String(flags.agent ?? WORKER_AGENT_ID);
           const effectiveThinking = String(flags.thinking ?? 'high');
+
+          if (action.kind === 'work') {
+            const delegationState = await loadWorkerDelegationState(action.sessionId, action.ticketId);
+            if (delegationState.kind === 'running') {
+              execution.push({
+                sessionId: action.sessionId,
+                ticketId: action.ticketId,
+                parsed: null,
+                workerOutput: '',
+                outcome: 'delegated_running',
+                detail: `background_started_at=${delegationState.meta.startedAt}`,
+              });
+              continue;
+            }
+
+            if (delegationState.kind === 'completed') {
+              await applyWorkerOutput(action, delegationState.workerOutput, 'source=background-delegation');
+              continue;
+            }
+          }
+
           const dispatched = await dispatchWorkerTurn({
+            ticketId: action.ticketId,
             agentId: effectiveAgent,
             sessionId: action.sessionId,
             text: action.text,
             thinking: effectiveThinking,
           });
 
-          if (action.kind === 'work') {
-            const workerOutput = dispatched.workerOutput;
-            const contract = validateWorkerResponseContract(workerOutput);
-            const parsed = contract.command;
-
-            if (!contract.ok || !parsed) {
-              execution.push({
-                sessionId: action.sessionId,
-                ticketId: action.ticketId,
-                parsed,
-                workerOutput,
-                outcome: 'parse_error',
-                detail: contract.violations.join(' '),
-              });
-              continue;
-            }
-
-            try {
-              if (parsed.kind === 'continue') {
-                await update(adapter, action.ticketId, parsed.text);
-              } else if (parsed.kind === 'blocked') {
-                await ask(adapter, action.ticketId, parsed.text);
-              } else {
-                await complete(adapter, action.ticketId, parsed.result);
-              }
-
-              applyWorkerCommandToSessionMap(plan.map, action.ticketId, parsed, new Date());
-              execution.push({
-                sessionId: action.sessionId,
-                ticketId: action.ticketId,
-                parsed,
-                workerOutput,
-                outcome: 'applied',
-                detail: `evidence.present=${String(contract.evidence.present)} evidence.concrete=${String(contract.evidence.hasConcreteExecution)}`,
-              });
-            } catch (err: any) {
-              execution.push({
-                sessionId: action.sessionId,
-                ticketId: action.ticketId,
-                parsed,
-                workerOutput,
-                outcome: 'mutation_error',
-                detail: err?.message ?? String(err),
-              });
-              throw err;
-            }
+          if (action.kind !== 'work') {
+            continue;
           }
+
+          if (dispatched.kind === 'delegated') {
+            // IMPORTANT: Do not write delegation timeout notices back to the ticket.
+            // They are human-facing runtime artifacts and become spam when posted as comments.
+            // The dispatcher will pick up the background result on a later cron turn.
+            execution.push({
+              sessionId: action.sessionId,
+              ticketId: action.ticketId,
+              parsed: null,
+              workerOutput: dispatched.notice,
+              outcome: 'delegated_started',
+              detail: 'source=sync-timeout; ticket_notified=false',
+            });
+            continue;
+          }
+
+          await applyWorkerOutput(action, dispatched.workerOutput);
         }
 
         noWorkAlert = await maybeSendNoWorkFirstHitAlert({

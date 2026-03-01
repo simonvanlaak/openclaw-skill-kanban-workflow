@@ -141,7 +141,7 @@ export class LinearAdapter implements Adapter {
       url: item.url,
       stage: item.stage.key,
       body: undefined,
-      labels: item.labels,
+      labels: [...item.labels],
       updatedAt: item.updatedAt,
     };
   }

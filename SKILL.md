@@ -122,7 +122,7 @@ Cron dispatcher behavior (`kanban-workflow cron-dispatch`):
 - **Strict contracts**
   - command parse is strict: exactly one terminal command, valid flag, final line
   - continue proof-gate: `continue` is rejected unless evidence shows concrete execution
-  - if no work is available, dispatch is silent/no-op
+  - if no work is available, dispatcher sends no worker action; first no-work hit in a streak sends a Rocket.Chat alert to `simon.vanlaak` (env-overridable)
 
 ## CLI ergonomics: "What next" tips
 
