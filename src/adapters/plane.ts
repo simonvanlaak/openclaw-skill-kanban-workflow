@@ -208,6 +208,7 @@ export class PlaneAdapter implements Adapter {
    * We default to `-f json` and fall back to `--format json` if needed.
    */
   private readonly formatArgs: readonly string[];
+  private readonly issueProjectCache = new Map<string, string>();
 
   constructor(opts: {
     workspaceSlug: string;
@@ -319,7 +320,7 @@ export class PlaneAdapter implements Adapter {
       .trim();
   }
 
-  private statesCache?: PlaneState[];
+  private readonly statesCacheByProject = new Map<string, PlaneState[]>();
 
   private getSingleProjectId(forWhat: string): string {
     if (this.projectIds.length !== 1) {
@@ -328,11 +329,61 @@ export class PlaneAdapter implements Adapter {
     return this.projectIds[0];
   }
 
-  private async fetchStates(): Promise<PlaneState[]> {
-    if (this.statesCache) return this.statesCache;
+  private rememberIssueProject(issueId: string, projectId: string): void {
+    const iid = String(issueId ?? '').trim();
+    const pid = String(projectId ?? '').trim();
+    if (!iid || !pid) return;
+    this.issueProjectCache.set(iid, pid);
+  }
 
-    const projectId = this.getSingleProjectId('setStage');
+  private projectIdFromIssueRaw(raw: unknown): string | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const issue: any = raw;
+    const direct = issue.project_id ?? issue.projectId;
+    if (direct != null) {
+      const out = String(direct).trim();
+      if (out) return out;
+    }
+    const nested = issue.project?.id ?? issue.project?.project_id ?? issue.project_detail?.id;
+    if (nested != null) {
+      const out = String(nested).trim();
+      if (out) return out;
+    }
+    return undefined;
+  }
 
+  private async resolveProjectIdForIssue(id: string, forWhat: string): Promise<string> {
+    const issueId = String(id ?? '').trim();
+    if (!issueId) throw new Error(`PlaneAdapter.${forWhat}: missing issue id`);
+
+    if (this.projectIds.length === 1) {
+      const projectId = this.projectIds[0]!;
+      this.rememberIssueProject(issueId, projectId);
+      return projectId;
+    }
+
+    const cached = this.issueProjectCache.get(issueId);
+    if (cached) return cached;
+
+    for (const projectId of this.projectIds) {
+      try {
+        const raw = await this.getIssueRaw(projectId, issueId);
+        const foundId = idFromUnknown((raw as any)?.id);
+        if (foundId && String(foundId) === issueId) {
+          this.rememberIssueProject(issueId, projectId);
+          return projectId;
+        }
+      } catch {
+        // Continue probing next project.
+      }
+    }
+
+    throw new Error(`PlaneAdapter.${forWhat}: unable to resolve project for issue ${issueId}`);
+  }
+
+  private async fetchStatesForProject(projectId: string): Promise<PlaneState[]> {
+    const cached = this.statesCacheByProject.get(projectId);
+    if (cached) return cached;
     const raw = (await this.runJson(['states', '--project', projectId])) ?? [];
     const statesRaw = Array.isArray(raw)
       ? raw
@@ -354,12 +405,12 @@ export class PlaneAdapter implements Adapter {
       .passthrough();
 
     const states = z.array(StateSchema).parse(statesRaw);
-    this.statesCache = states;
+    this.statesCacheByProject.set(projectId, states);
     return states;
   }
 
-  private async resolveStateIdForStage(stage: import('../stage.js').StageKey): Promise<string> {
-    const states = await this.fetchStates();
+  private async resolveStateIdForStage(projectId: string, stage: import('../stage.js').StageKey): Promise<string> {
+    const states = await this.fetchStatesForProject(projectId);
 
     // Find a Plane state whose name maps to the canonical stage.
     const match = states.find((s) => this.stageMap[s.name] === stage);
@@ -590,7 +641,11 @@ export class PlaneAdapter implements Adapter {
     const item = snap.get(id);
     if (!item) throw new Error(`Plane work item not found: ${id}`);
 
-    const projectId = this.projectIds.find((pid) => String(pid) === String((item.raw as any)?.project_id)) ?? this.projectIds[0];
+    const projectId =
+      this.projectIds.find((pid) => String(pid) === String((item.raw as any)?.project_id)) ??
+      this.projectIdFromIssueRaw(item.raw) ??
+      this.projectIds[0];
+    this.rememberIssueProject(id, projectId);
     let body = extractIssueBody(item.raw);
 
     // Fetch issue details for richer/full description where list payload is truncated.
@@ -617,7 +672,7 @@ export class PlaneAdapter implements Adapter {
     id: string,
     opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
   ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { id?: string; username?: string; name?: string } }>> {
-    const projectId = this.getSingleProjectId('listComments');
+    const projectId = await this.resolveProjectIdForIssue(id, 'listComments');
     const raw = await this.listCommentsViaApi(projectId, id);
 
     const mapped = raw
@@ -663,8 +718,8 @@ export class PlaneAdapter implements Adapter {
   }
 
   async setStage(id: string, stage: import('../stage.js').StageKey): Promise<void> {
-    const projectId = this.getSingleProjectId('setStage');
-    const stateId = await this.resolveStateIdForStage(stage);
+    const projectId = await this.resolveProjectIdForIssue(id, 'setStage');
+    const stateId = await this.resolveStateIdForStage(projectId, stage);
     await this.cli.run([
       ...this.baseArgs,
       ...this.formatArgs,
@@ -679,7 +734,7 @@ export class PlaneAdapter implements Adapter {
   }
 
   async addComment(id: string, body: string): Promise<void> {
-    const projectId = this.getSingleProjectId('addComment');
+    const projectId = await this.resolveProjectIdForIssue(id, 'addComment');
     const msg = String(body || '').trim();
     if (!msg) return;
 
@@ -689,7 +744,7 @@ export class PlaneAdapter implements Adapter {
 
   async createInBacklogAndAssignToSelf(input: { title: string; body: string; projectId?: string }): Promise<{ id: string; url?: string }> {
     const projectId = input.projectId ? String(input.projectId) : this.getSingleProjectId('create');
-    const backlogStateId = await this.resolveStateIdForStage('stage:todo');
+    const backlogStateId = await this.resolveStateIdForStage(projectId, 'stage:todo');
 
     const created = (await this.runJson([
       'issues',
@@ -706,6 +761,7 @@ export class PlaneAdapter implements Adapter {
 
     const id = created?.id ? String(created.id) : undefined;
     if (!id) throw new Error('PlaneAdapter.create: could not read created issue id from CLI output');
+    this.rememberIssueProject(id, projectId);
 
     const me = await this.whoami();
     if (!me.id) throw new Error('create: cannot resolve self user');
@@ -803,6 +859,7 @@ export class PlaneAdapter implements Adapter {
       const stage = Stage.fromAny(mapped);
 
       const updatedAtRaw = issue.updatedAt ?? issue.updated_at;
+      this.rememberIssueProject(issue.id, projectId);
 
       items.set(issue.id, {
         id: issue.id,

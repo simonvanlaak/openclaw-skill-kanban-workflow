@@ -5,7 +5,7 @@
 - `src/adapters/` hosts the Plane integration (`plane`) and adapter docs.
 - `src/automation/` contains cron/autopilot orchestration logic.
 - `src/verbs/` implements user-facing workflow actions.
-- `tests/` contains Vitest suites; test files follow `*.test.ts` (for example, `tests/autopilot_tick.test.ts`).
+- `tests/` contains Vitest suites; test files follow `*.test.ts` (for example, `tests/plane_adapter.test.ts`).
 - `scripts/` contains shell/Node helper scripts used by adapters and cron dispatch.
 - `config/` stores local runtime config (for example `config/kanban-workflow.json`); do not commit secrets.
 - `references/` stores design notes and plans, not runtime code.
@@ -20,7 +20,7 @@
 ## Coding Style & Naming Conventions
 - Language: TypeScript ESM (`"type": "module"`), target `ES2022`, strict mode enabled.
 - Use 2-space indentation and semicolons, matching existing files.
-- File names use snake_case for multiword modules (for example `next_selection.ts`, `autopilot_tick.ts`).
+- File names use snake_case for multiword modules (for example `next_selection.ts`, `session_dispatcher.ts`).
 - Keep modules focused: shared contracts in `src/core/ports.ts`, platform-specific logic in `src/adapters/*`.
 
 ## Testing Guidelines

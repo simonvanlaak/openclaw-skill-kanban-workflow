@@ -209,23 +209,13 @@ function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string 
   return { cmd, flags };
 }
 
-function makeWorkerSessionKey(agentId: string, workerSessionId: string): string {
-  const normalizedAgent = agentId.trim().toLowerCase();
-  const normalizedSession = workerSessionId.trim().toLowerCase();
-  const withoutPrefix = normalizedSession
-    .replace(new RegExp(`^agent:${normalizedAgent}:`, 'i'), '')
-    .replace(new RegExp(`^${normalizedAgent}[-_:]+`, 'i'), '')
-    .replace(/^kanban-workflow-worker[-_:]+/i, '');
-  const sessionPart = withoutPrefix || normalizedSession || 'session';
-  return `agent:${normalizedAgent}:${sessionPart}`;
-}
-
 type DispatchWorkerTurnResult =
   | { kind: 'immediate'; workerOutput: string; raw: string }
   | { kind: 'delegated'; notice: string };
 
 type WorkerDelegationMeta = {
   ticketId: string;
+  dispatchRunId: string;
   sessionId: string;
   agentId: string;
   thinking: string;
@@ -248,9 +238,27 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
+function timeoutMsToSeconds(timeoutMs: number): number {
+  return Math.max(1, Math.ceil(timeoutMs / 1000));
+}
+
+function withDispatchMetadataEnvelope(params: {
+  ticketId: string;
+  dispatchRunId: string;
+  text: string;
+}): string {
+  return [
+    'DISPATCH_METADATA',
+    `ticketId: ${params.ticketId}`,
+    `dispatchRunId: ${params.dispatchRunId}`,
+    '',
+    params.text,
+  ].join('\n');
+}
+
 function workerDelegationPaths(sessionId: string): {
   dir: string;
-  payloadPath: string;
+  messagePath: string;
   resultPath: string;
   stderrPath: string;
   exitCodePath: string;
@@ -261,7 +269,7 @@ function workerDelegationPaths(sessionId: string): {
   const dir = path.join(WORKER_DELEGATION_DIR, safeSession);
   return {
     dir,
-    payloadPath: path.join(dir, 'payload.json'),
+    messagePath: path.join(dir, 'message.txt'),
     resultPath: path.join(dir, 'result.json'),
     stderrPath: path.join(dir, 'stderr.log'),
     exitCodePath: path.join(dir, 'exit.code'),
@@ -279,7 +287,7 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function parseWorkerOutputFromGatewayCall(stdoutRaw: unknown, stderrRaw: unknown): { workerOutput: string; raw: string } {
+function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: unknown): { workerOutput: string; raw: string } {
   const raw = String(stdoutRaw ?? '').trim();
   let workerOutput = raw;
 
@@ -334,19 +342,18 @@ function buildDelegationNotice(params: { ticketId: string; text: string; syncTim
 
 async function startWorkerDelegation(params: {
   ticketId: string;
+  dispatchRunId: string;
   agentId: string;
   sessionId: string;
   text: string;
   thinking: string;
   syncTimeoutMs: number;
 }): Promise<void> {
-  const payload = {
-    idempotencyKey: randomUUID(),
-    message: params.text,
-    agentId: params.agentId,
-    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
-    thinking: params.thinking,
-  };
+  const message = withDispatchMetadataEnvelope({
+    ticketId: params.ticketId,
+    dispatchRunId: params.dispatchRunId,
+    text: params.text,
+  });
 
   const backgroundTimeoutMs = resolvePositiveTimeoutMs(
     process.env.KWF_WORKER_BACKGROUND_TIMEOUT_MS,
@@ -356,6 +363,7 @@ async function startWorkerDelegation(params: {
   const paths = workerDelegationPaths(params.sessionId);
   const meta: WorkerDelegationMeta = {
     ticketId: params.ticketId,
+    dispatchRunId: params.dispatchRunId,
     sessionId: params.sessionId,
     agentId: params.agentId,
     thinking: params.thinking,
@@ -366,13 +374,14 @@ async function startWorkerDelegation(params: {
 
   await fs.mkdir(paths.dir, { recursive: true });
   await Promise.all([
-    fs.writeFile(paths.payloadPath, `${JSON.stringify(payload)}\n`, 'utf8'),
+    fs.writeFile(paths.messagePath, message, 'utf8'),
     fs.writeFile(paths.metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8'),
   ]);
 
+  const timeoutSeconds = timeoutMsToSeconds(backgroundTimeoutMs);
   const script = [
     'set +e',
-    `openclaw gateway call agent --expect-final --json --timeout ${backgroundTimeoutMs} --params "$(cat ${shellQuote(paths.payloadPath)})" > ${shellQuote(paths.resultPath)} 2> ${shellQuote(paths.stderrPath)}`,
+    `openclaw agent --agent ${shellQuote(params.agentId)} --session-id ${shellQuote(params.sessionId)} --thinking ${shellQuote(params.thinking)} --timeout ${timeoutSeconds} --message "$(cat ${shellQuote(paths.messagePath)})" --json > ${shellQuote(paths.resultPath)} 2> ${shellQuote(paths.stderrPath)}`,
     'status=$?',
     `printf "%s\\n" "$status" > ${shellQuote(paths.exitCodePath)}`,
     `touch ${shellQuote(paths.donePath)}`,
@@ -428,7 +437,7 @@ async function loadWorkerDelegationState(sessionId: string, ticketId: string): P
 
   const stdoutRaw = await fs.readFile(paths.resultPath, 'utf8').catch(() => '');
   const stderrRaw = await fs.readFile(paths.stderrPath, 'utf8').catch(() => '');
-  const parsed = parseWorkerOutputFromGatewayCall(stdoutRaw, stderrRaw);
+  const parsed = parseWorkerOutputFromAgentCall(stdoutRaw, stderrRaw);
   await clearWorkerDelegation(sessionId);
 
   return {
@@ -441,36 +450,39 @@ async function loadWorkerDelegationState(sessionId: string, ticketId: string): P
 
 async function dispatchWorkerTurn(params: {
   ticketId: string;
+  dispatchRunId: string;
   agentId: string;
   sessionId: string;
   text: string;
   thinking: string;
 }): Promise<DispatchWorkerTurnResult> {
-  const payload = {
-    idempotencyKey: randomUUID(),
-    message: params.text,
-    agentId: params.agentId,
-    sessionKey: makeWorkerSessionKey(params.agentId, params.sessionId),
-    thinking: params.thinking,
-  };
+  const message = withDispatchMetadataEnvelope({
+    ticketId: params.ticketId,
+    dispatchRunId: params.dispatchRunId,
+    text: params.text,
+  });
 
   const syncTimeoutMs = resolvePositiveTimeoutMs(process.env.KWF_WORKER_SYNC_TIMEOUT_MS, DEFAULT_WORKER_SYNC_TIMEOUT_MS);
   const allowBackgroundDelegation = isBackgroundWorkerDelegationAllowed(params.agentId);
+  const timeoutSeconds = timeoutMsToSeconds(syncTimeoutMs);
 
   try {
     const run = await execa('openclaw', [
-      'gateway',
-      'call',
       'agent',
-      '--expect-final',
-      '--json',
+      '--agent',
+      params.agentId,
+      '--session-id',
+      params.sessionId,
+      '--thinking',
+      params.thinking,
       '--timeout',
-      String(syncTimeoutMs),
-      '--params',
-      JSON.stringify(payload),
+      String(timeoutSeconds),
+      '--message',
+      message,
+      '--json',
     ]);
 
-    const parsed = parseWorkerOutputFromGatewayCall(run.stdout, run.stderr);
+    const parsed = parseWorkerOutputFromAgentCall(run.stdout, run.stderr);
     if (hasTimedOutFallbackMessage(parsed.workerOutput) || hasTimedOutFallbackMessage(parsed.raw)) {
       if (!allowBackgroundDelegation) {
         return { kind: 'immediate', workerOutput: '', raw: '' };
@@ -478,6 +490,7 @@ async function dispatchWorkerTurn(params: {
 
       await startWorkerDelegation({
         ticketId: params.ticketId,
+        dispatchRunId: params.dispatchRunId,
         agentId: params.agentId,
         sessionId: params.sessionId,
         text: params.text,
@@ -505,6 +518,7 @@ async function dispatchWorkerTurn(params: {
 
     await startWorkerDelegation({
       ticketId: params.ticketId,
+      dispatchRunId: params.dispatchRunId,
       agentId: params.agentId,
       sessionId: params.sessionId,
       text: params.text,
@@ -626,28 +640,23 @@ async function decideWithAgent(params: {
     params.report,
   ].join('\n');
 
-  const payload = {
-    idempotencyKey: randomUUID(),
-    message: prompt,
-    agentId: decisionAgentId,
-    sessionKey: makeWorkerSessionKey(decisionAgentId, state.sessionId),
-    thinking: 'low',
-  };
-
   try {
     const run = await execa('openclaw', [
-      'gateway',
-      'call',
       'agent',
-      '--expect-final',
-      '--json',
+      '--agent',
+      decisionAgentId,
+      '--session-id',
+      state.sessionId,
+      '--thinking',
+      'low',
       '--timeout',
-      '30000',
-      '--params',
-      JSON.stringify(payload),
+      '30',
+      '--message',
+      prompt,
+      '--json',
     ]);
 
-    const parsed = parseWorkerOutputFromGatewayCall(run.stdout, run.stderr);
+    const parsed = parseWorkerOutputFromAgentCall(run.stdout, run.stderr);
     state.ticketsUsedCount = Number(state.ticketsUsedCount ?? 0) + 1;
     state.contextChars = Number(state.contextChars ?? 0) + prompt.length + parsed.workerOutput.length;
 
@@ -971,6 +980,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'workflow-loop') {
       const dryRun = Boolean(flags['dry-run']);
+      const dispatchRunId = randomUUID();
       const output = await runWorkflowLoopSelection(adapter, dryRun, requeueTargetStage);
       const previousMap = await loadSessionMap();
       archiveStaleBlockedWorkerSessions(previousMap, new Date(), 7);
@@ -981,12 +991,6 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         output?.tick?.kind === 'in_progress' &&
         previousMap.active?.ticketId &&
         previousMap.active.ticketId === plan.activeTicketId;
-
-      if (activeCarryForward) {
-        await saveSessionMap(plan.map);
-        // Poll-only mode while a worker ticket is already active.
-        return 0;
-      }
 
       const execution: Array<{
         sessionId: string;
@@ -1005,6 +1009,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         if (facts.missing.length > 0) {
           const retry = await dispatchWorkerTurn({
             ticketId: action.ticketId,
+            dispatchRunId,
             agentId: WORKER_AGENT_ID,
             sessionId: action.sessionId,
             text: buildRetryPrompt(facts.missing),
@@ -1095,10 +1100,18 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
               await applyWorkerOutput(action, delegationState.workerOutput, 'source=background-delegation');
               continue;
             }
+
+            if (activeCarryForward) {
+              // Poll-only mode while a worker ticket is already active.
+              // We still run housekeeping checks above (running/completed background status),
+              // but we do not trigger a new worker turn on this tick.
+              continue;
+            }
           }
 
           const dispatched = await dispatchWorkerTurn({
             ticketId: action.ticketId,
+            dispatchRunId,
             agentId: effectiveAgent,
             sessionId: action.sessionId,
             text: action.text,
@@ -1135,6 +1148,11 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         });
 
         await saveSessionMap(plan.map);
+
+        if (activeCarryForward && execution.length === 0) {
+          // Quiet poll when active ticket has no new completed worker output.
+          return 0;
+        }
       } else {
         noWorkAlert = await maybeSendNoWorkFirstHitAlert({
           output,
@@ -1148,6 +1166,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         `${JSON.stringify({
           workflowLoop: {
             dryRun,
+            dispatchRunId,
             actions: plan.actions,
             execution,
             noWorkAlert,
