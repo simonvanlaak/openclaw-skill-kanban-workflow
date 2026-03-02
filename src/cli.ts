@@ -7,9 +7,7 @@ import { execa } from 'execa';
 import { loadConfigFromFile } from './config.js';
 import { runSetup } from './setup.js';
 import { PlaneAdapter } from './adapters/plane.js';
-import { runAutopilotTick } from './automation/autopilot_tick.js';
 import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
-import { lockfile } from './automation/lockfile.js';
 import {
   applyWorkerCommandToSessionMap,
   buildWorkflowLoopPlan,
@@ -19,7 +17,7 @@ import {
 } from './automation/session_dispatcher.js';
 import { extractWorkerTerminalCommand, type WorkerTerminalCommand } from './automation/worker_contract.js';
 import { StageKeySchema } from './stage.js';
-import { ask, complete, create, next, show, start, update } from './verbs/verbs.js';
+import { ask, complete, create, show, start, update } from './verbs/verbs.js';
 
 export { extractWorkerTerminalCommand } from './automation/worker_contract.js';
 
@@ -77,18 +75,6 @@ function writeHelp(io: CliIo): void {
   );
 }
 
-type NeedsMyAttentionPort = {
-  listNeedsMyAttention?: () => Promise<Array<{
-    id: string;
-    title: string;
-    projectId: string;
-    stage: 'stage:blocked' | 'stage:in-review';
-    url?: string;
-    updatedAt?: Date;
-  }>>;
-};
-
-const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
 const WORKFLOW_LOOP_AGENT_ID = 'kanban-workflow-workflow-loop';
 const WORKER_AGENT_ID = 'kanban-workflow-worker';
@@ -127,133 +113,69 @@ async function ensurePlaneEnvFromHelper(): Promise<void> {
   }
 }
 
-async function saveCurrentAutopilotId(id: string): Promise<void> {
-  await fs.mkdir('.tmp', { recursive: true });
-  await fs.writeFile(AUTOPILOT_CURRENT_ID_PATH, `${id}\n`, 'utf8');
+function actorKeys(actor: { id?: string; username?: string; name?: string } | undefined): string[] {
+  if (!actor) return [];
+  return [actor.id, actor.username, actor.name]
+    .filter((x): x is string => Boolean(x && String(x).trim().length > 0))
+    .map((x) => String(x).trim().toLowerCase());
 }
 
-async function loadCurrentAutopilotId(): Promise<string | null> {
-  try {
-    const v = (await fs.readFile(AUTOPILOT_CURRENT_ID_PATH, 'utf8')).trim();
-    return v || null;
-  } catch {
-    return null;
-  }
+function isAssignedToSelf(assignees: readonly { id?: string; username?: string; name?: string }[] | undefined, me: { id?: string; username?: string; name?: string }): boolean {
+  if (!assignees || assignees.length === 0) return false;
+  const meKeys = new Set(actorKeys(me));
+  if (meKeys.size === 0) return false;
+  return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
 }
 
-function buildHaltOptions() {
-  return {
-    continue: {
-      command: 'kanban-workflow continue --text "update + next steps"',
-      requires: 'single text message with update + next steps',
-    },
-    blocked: {
-      command: 'kanban-workflow blocked --text "block reason + questions for humans"',
-      requires: 'single text message with blocker reason + questions',
-    },
-    completed: {
-      command: 'kanban-workflow completed --result "what was done"',
-      requires: 'result/what was done message',
-    },
-  };
-}
-
-async function runAutopilotCommand(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:todo'): Promise<any> {
+async function runWorkflowLoopSelection(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:todo'): Promise<any> {
   const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun, requeueTargetStage });
-  const res = await runAutopilotTick({ adapter, lock: lockfile, now: new Date() });
-  let output: any = res;
+  const me = await adapter.whoami();
+  const inProgressIds: string[] = await adapter.listIdsByStage('stage:in-progress');
 
-  if (res.kind === 'started') {
-    if (!dryRun) {
-      await start(adapter, res.id);
-      await saveCurrentAutopilotId(res.id);
-    }
-    const current = await show(adapter, res.id);
-    output = {
-      tick: res,
-      nextTicket: current,
-      instruction: 'Work on this ticket now.',
-      haltOptions: buildHaltOptions(),
-      dryRun,
-    };
-  } else if (res.kind === 'in_progress') {
-    // Long-term anti-noise policy: do not auto-post boilerplate progress comments from tick.
-    // Progress comments must come from explicit worker outcomes via:
-    // - kanban-workflow continue --text "..."
-    // - kanban-workflow blocked --text "..."
-    // - kanban-workflow completed --result "..."
-    if (!dryRun) {
-      await saveCurrentAutopilotId(res.id);
-    }
-    const current = await show(adapter, res.id);
-    output = {
-      tick: res,
-      nextTicket: current,
-      instruction: 'Continue working on this ticket now.',
-      haltOptions: buildHaltOptions(),
-      dryRun,
-    };
-  } else if (res.kind === 'blocked') {
-    if (!dryRun) {
-      await ask(
-        adapter,
-        res.id,
-        `${res.reason} Last activity is ${res.minutesStale} minutes old. Please resolve dependency, then move back to In Progress.`,
-      );
-    }
-    const nextRes = await next(adapter);
-    if (nextRes.kind === 'item') {
-      if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
-      output = {
-        tick: res,
-        nextTicket: nextRes,
-        instruction: 'Previous ticket is blocked. Work on this next ticket now.',
-        haltOptions: buildHaltOptions(),
-        dryRun,
-      };
-    } else {
-      output = {
-        tick: res,
-        noWork: true,
-        instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
-        dryRun,
-      };
-    }
-  } else if (res.kind === 'completed') {
-    if (res.reasonCode !== 'completion_signal_strong') {
-      output = { tick: res, action: 'hold', reason: 'completion_proof_gate_failed', dryRun };
-    } else {
-      if (!dryRun) {
-        await complete(adapter, res.id, `${res.reason} (autopilot decision gate)`);
-      }
-      const nextRes = await next(adapter);
-      if (nextRes.kind === 'item') {
-        if (!dryRun) await saveCurrentAutopilotId(nextRes.item.id);
-        output = {
-          tick: res,
-          nextTicket: nextRes,
-          instruction: 'Previous ticket completed. Work on this next ticket now.',
-          haltOptions: buildHaltOptions(),
-          dryRun,
-        };
-      } else {
-        output = {
-          tick: res,
-          noWork: true,
-          instruction: 'No work instruction: no next ticket available. Wait for the next autopilot tick.',
-          dryRun,
-        };
-      }
+  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
+  for (const id of inProgressIds) {
+    const item = await adapter.getWorkItem(id);
+    if (isAssignedToSelf(item.assignees, me)) {
+      ownInProgress.push({ id, updatedAt: item.updatedAt });
     }
   }
 
-  if (output && typeof output === 'object') {
-    output.autoReopen = autoReopen;
-  } else {
-    output = { tick: output, autoReopen, dryRun };
+  if (ownInProgress.length > 0) {
+    ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+    const keep = ownInProgress[0]!;
+    if (!dryRun) {
+      for (const extra of ownInProgress.slice(1)) {
+        await adapter.setStage(extra.id, 'stage:todo');
+      }
+    }
+    return {
+      tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
+      nextTicket: await show(adapter, keep.id),
+      autoReopen,
+      dryRun,
+    };
   }
 
-  return output;
+  const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
+  for (const id of backlogIds) {
+    const item = await adapter.getWorkItem(id);
+    if (!isAssignedToSelf(item.assignees, me)) continue;
+    if (!dryRun) {
+      await start(adapter, id);
+    }
+    return {
+      tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
+      nextTicket: await show(adapter, id),
+      autoReopen,
+      dryRun,
+    };
+  }
+
+  return {
+    tick: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
+    autoReopen,
+    dryRun,
+  };
 }
 
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
@@ -625,9 +547,9 @@ function extractWorkerReportFacts(report: string): WorkerReportFacts {
   const text = String(report ?? '');
   const lower = text.toLowerCase();
 
-  const hasVerification = /\bverification\b/.test(lower);
-  const hasBlockers = /\bblocker(s)?\b/.test(lower) && (/\bopen\b/.test(lower) || /\bresolved\b/.test(lower));
-  const hasUncertainties = /\buncertaint(y|ies)\b/.test(lower);
+  const hasVerification = /\bverification\b/.test(lower) || /\bverified\b/.test(lower) || /\btests?\b/.test(lower) || /\bvalidation\b/.test(lower);
+  const hasBlockers = (/\bblocker(s)?\b/.test(lower) || /\bblocked\b/.test(lower) || /\bdependency\b/.test(lower)) && (/\bopen\b/.test(lower) || /\bresolved\b/.test(lower));
+  const hasUncertainties = /\buncertaint(y|ies)\b/.test(lower) || /\buncertain\b/.test(lower) || /\brisk(s)?\b/.test(lower) || /\bquestion(s)?\b/.test(lower);
   const hasConfidence = /\bconfidence\b/.test(lower) && /\b(0(\.\d+)?|1(\.0+)?)\b/.test(lower);
 
   const missing: string[] = [];
@@ -746,7 +668,21 @@ function noWorkTickFromOutput(output: any): { kind?: string; reasonCode?: string
 
 function buildNoWorkFirstHitAlertMessage(reasonCode?: string): string {
   const reasonSuffix = reasonCode ? ` (reason: ${reasonCode})` : '';
-  return `Kanban autopilot first no-work hit: there is no actionable ticket right now${reasonSuffix}. I will stay idle until a new ticket becomes actionable.`;
+  return `Kanban workflow-loop first no-work hit: there is no actionable ticket right now${reasonSuffix}. I will stay idle until a new ticket becomes actionable.`;
+}
+
+function archiveStaleBlockedWorkerSessions(map: SessionMap, now: Date, inactivityDays = 7): void {
+  const cutoffMs = now.getTime() - inactivityDays * 24 * 60 * 60 * 1000;
+  for (const [ticketId, entry] of Object.entries(map.sessionsByTicket ?? {})) {
+    if (entry?.lastState !== 'blocked') continue;
+    const lastSeenMs = Date.parse(String(entry.lastSeenAt ?? ''));
+    if (!Number.isFinite(lastSeenMs)) continue;
+    if (lastSeenMs > cutoffMs) continue;
+    delete map.sessionsByTicket[ticketId];
+    if (map.active?.ticketId === ticketId) {
+      map.active = undefined;
+    }
+  }
 }
 
 async function maybeSendNoWorkFirstHitAlert(params: {
@@ -1035,8 +971,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
     if (cmd === 'workflow-loop') {
       const dryRun = Boolean(flags['dry-run']);
-      const output = await runAutopilotCommand(adapter, dryRun, requeueTargetStage);
+      const output = await runWorkflowLoopSelection(adapter, dryRun, requeueTargetStage);
       const previousMap = await loadSessionMap();
+      archiveStaleBlockedWorkerSessions(previousMap, new Date(), 7);
       const plan = buildWorkflowLoopPlan({ autopilotOutput: output, previousMap, now: new Date() });
 
       const activeCarryForward =

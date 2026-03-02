@@ -22,17 +22,6 @@ function normalizePlaneIssuesList(raw: unknown): any[] {
   return [];
 }
 
-function discoverPlaneOrderField(issuesRaw: unknown): string | undefined {
-  const issues = normalizePlaneIssuesList(issuesRaw);
-  // Best-effort heuristics. Plane often uses numeric ordering fields.
-  const candidates = ['sort_order', 'sortOrder', 'rank', 'position', 'order', 'sequence_id', 'sequenceId'];
-  for (const field of candidates) {
-    const has = issues.some((x: any) => x && typeof x === 'object' && field in x);
-    if (has) return field;
-  }
-  return undefined;
-}
-
 function priorityValueFromUnknown(raw: unknown): number | undefined {
   if (raw == null) return undefined;
 
@@ -533,18 +522,18 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listBacklogIdsInOrder(): Promise<string[]> {
-    // Try to preserve explicit UI ordering if we can discover it from API fields.
-    // Otherwise require an explicit order field from setup, and finally fall back to updatedAt desc.
-    // Multi-project: we list backlog candidates per project (in config order) and concatenate.
-    // Plane UI ordering isn't stable across projects anyway, so config order wins.
+    // Requirements-aligned ordering:
+    // - merge backlog across all configured projects
+    // - strict self-assigned gating
+    // - priority desc
+    // - title alpha tie-break
+    // - deterministic id tie-break
     const me = await this.whoami();
     const meId = me.id;
 
-    const ids: string[] = [];
+    const merged: Array<{ id: string; title: string; priority: number }> = [];
 
     for (const projectId of this.projectIds) {
-      // This call is intentionally constructed as `plane issues list ... -f json` to match
-      // common wrapper usage (and our tests).
       const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: meId });
       const issues = normalizePlaneIssuesList(issuesRaw);
 
@@ -568,52 +557,23 @@ export class PlaneAdapter implements Adapter {
       }
 
       const byId = new Map(issues.map((x: any) => [String(x.id), x] as const));
-
-      // If priority differs across backlog items, prioritize by priority first.
-      const priorityById = new Map<string, number>();
       for (const item of backlog) {
-        const p = extractPriorityFromIssue(byId.get(item.id));
-        if (p != null) priorityById.set(item.id, p);
+        merged.push({
+          id: item.id,
+          title: String(item.title ?? ''),
+          priority: extractPriorityFromIssue(byId.get(item.id)) ?? Number.NEGATIVE_INFINITY,
+        });
       }
-
-      const distinctPriorities = new Set(priorityById.values());
-      const usePriorityOrdering = distinctPriorities.size > 1;
-
-      // Try preserve explicit ordering if we can discover it; otherwise updatedAt desc.
-      const orderField = this.orderField ?? discoverPlaneOrderField(issuesRaw);
-      const orderById = new Map<string, number>();
-      if (orderField) {
-        for (const item of backlog) {
-          const order = Number(byId.get(item.id)?.[orderField]);
-          if (Number.isFinite(order)) orderById.set(item.id, order);
-        }
-      }
-
-      backlog.sort((a, b) => {
-        if (usePriorityOrdering) {
-          const pa = priorityById.get(a.id) ?? Number.NEGATIVE_INFINITY;
-          const pb = priorityById.get(b.id) ?? Number.NEGATIVE_INFINITY;
-          if (pa !== pb) return pb - pa;
-        }
-
-        const oa = orderById.get(a.id);
-        const ob = orderById.get(b.id);
-        const hasOa = oa != null;
-        const hasOb = ob != null;
-
-        if (hasOa && hasOb && oa !== ob) return oa - ob;
-        if (hasOa !== hasOb) return hasOa ? -1 : 1;
-
-        const updatedCmp = (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0);
-        if (updatedCmp !== 0) return updatedCmp;
-
-        return String(a.id).localeCompare(String(b.id));
-      });
-
-      ids.push(...backlog.map((i) => i.id));
     }
 
-    return ids;
+    merged.sort((a, b) => {
+      if (a.priority !== b.priority) return b.priority - a.priority;
+      const titleCmp = a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+      if (titleCmp !== 0) return titleCmp;
+      return a.id.localeCompare(b.id);
+    });
+
+    return merged.map((i) => i.id);
   }
 
   async getWorkItem(id: string): Promise<{
