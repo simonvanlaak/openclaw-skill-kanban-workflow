@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 - `src/` contains production TypeScript code.
-- `src/adapters/` hosts platform integrations (`github`, `plane`, `linear`, `planka`) and adapter docs.
+- `src/adapters/` hosts the Plane integration (`plane`) and adapter docs.
 - `src/automation/` contains cron/autopilot orchestration logic.
 - `src/verbs/` implements user-facing workflow actions.
 - `tests/` contains Vitest suites; test files follow `*.test.ts` (for example, `tests/autopilot_tick.test.ts`).
@@ -39,6 +39,6 @@
   - sample CLI output when UX/automation behavior changes
 
 ## Security & Configuration Tips
-- This project inherits permissions from local CLIs (`gh`, `plane`, `linear`, `planka-cli`). Use least-privilege auth.
+- This project inherits permissions from the local `plane` CLI. Use least-privilege auth.
 - Never hardcode tokens; use environment variables and local CLI auth state.
 - Treat `config/kanban-workflow.json` as sensitive metadata.

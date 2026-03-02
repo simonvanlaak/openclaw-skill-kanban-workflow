@@ -3,7 +3,7 @@ import type { WorkItem } from './models.js';
 /**
  * Port interface for a platform adapter.
  *
- * Adapters MUST rely on platform CLIs (gh, planka-cli, etc.) for auth/session.
+ * Adapters MUST rely on platform CLIs (plane) for auth/session.
  * The Clawban core never handles HTTP auth tokens directly.
  */
 export interface Adapter {

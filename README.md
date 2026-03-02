@@ -1,182 +1,60 @@
 # Kanban Workflow
 
-A TypeScript-first core skill for a stage-based “agentic co-worker” that integrates project-management platforms via **CLI-first adapters** (external CLIs or wrapper scripts; some use API keys via env vars). It also includes an `autopilot-tick` command intended to be run on a schedule (e.g. OpenClaw cron). Setup can optionally install that cron job.
+Plane-only workflow automation with a local `workflow-loop` runner and LLM worker turns.
 
-`autopilot-tick` is now an execution orchestrator, not just a detector: each run decides and executes one path (continue/start, blocked, completed).
+## Scope
 
-## What it is
+- Adapter support: **Plane only**.
+- Orchestration: `workflow-loop` (poll/select/delegate/apply).
+- Legacy multi-adapter surface is removed.
+- Legacy user command `autopilot-tick` is removed.
 
-Kanban Workflow standardizes a canonical workflow state machine using an existing `stage:*` lifecycle:
+## Commands
 
-- `stage:todo`
-- `stage:blocked`
-- `stage:in-progress`
-- `stage:in-review`
+- `kanban-workflow setup --adapter plane --plane-workspace-slug <slug> --plane-scope all-projects --map-backlog <name> --map-blocked <name> --map-in-progress <name> --map-in-review <name> [--force] [--autopilot-cron-expr "*/5 * * * *"] [--autopilot-cron-tz <tz>] [--autopilot-install-cron] [--autopilot-requeue-target-stage <stage>]`
+- `kanban-workflow workflow-loop [--dry-run]`
+- `kanban-workflow show --id <ticket-id>`
+- `kanban-workflow create --project-id <uuid> --title "..." [--body "..."]`
+- `kanban-workflow help`
 
-Notes:
-- Done/closed is platform-specific and intentionally **not** part of the canonical stage set.
+## Behavior Summary
 
-It provides:
-- Canonical models + event types
-- Snapshot diffing to synthesize events (polling-friendly)
-- A deterministic `tick()` runner
-- Adapters that call existing CLIs using the user’s authenticated session
+- Setup requires Plane and enforces `--plane-scope all-projects`.
+- Backlog selection is global across configured Plane projects, ordered by priority and then title.
+- Only tickets assigned to `whoami` are eligible for active work.
+- `workflow-loop` is local CLI/script orchestration; it is not a continuously running agent.
+- If the currently active ticket is unchanged, `workflow-loop` exits quietly (poll-only behavior).
 
-Currently supported adapters:
-- **GitHub** via `gh` (in-repo adapter)
-- **Planka** via `planka-cli` (voydz/planka-cli)
-- **Plane** via ClawHub skill `plane` (owner: `vaguilera-jinko`)
-- **Linear** via ClawHub skill `linear` (ManuelHettich) + this repo’s `scripts/linear_json.sh` compatibility wrapper
+## Worker + Decision Flow
 
-See `src/adapters/README.md` for links and notes.
+Per workflow-loop work action:
 
-## Repo layout
+1. Worker agent runs in the ticket-bound session and produces a markdown report.
+2. Report must include verification evidence, blockers status, uncertainties, and confidence (0.0..1.0).
+3. If report facts are missing, one retry prompt is issued.
+4. Decision agent chooses exactly one: `continue` | `blocked` | `completed`.
+5. If the decision cannot be parsed, default is `blocked`.
+6. Per ticket continue cap is hard-limited to 2; after that only `blocked` or `completed` can be applied.
+7. Dispatcher applies Plane mutation and posts a free-text comment summary.
 
-- `SKILL.md` — OpenClaw skill entrypoint
-- `src/` — core library + adapters
-- `tests/` — vitest tests
-- `references/` — technical plan and notes
+Session behavior:
+- One worker session per ticket, reused while ticket remains active/open.
+- Blocked tickets keep session context for human unblock and resume.
+- Decision-agent session rotates every 5 tickets or when token usage reaches 50%.
+- Blocked ticket sessions are archived after 7 days.
 
-## CLI UX: "What next" tips
+## Development
 
-Every `kanban-workflow <verb>` execution prints a `What next:` tip line to guide the next step in the workflow.
+Install and validate:
 
-If setup is not completed (missing/invalid `config/kanban-workflow.json`), **all commands** will fail with a clear error and instruct you to run `kanban-workflow setup`.
-
-### Setup
-
-Setup is flags-only (non-interactive) and writes `config/kanban-workflow.json`.
-
-Common flags:
-- `--adapter <github|plane|linear|planka>`
-- `--force` (required to overwrite an existing config)
-
-Stage mapping (required; map *platform stage/list/status name* → canonical stage):
-- `--map-backlog <platform-name>`
-- `--map-blocked <platform-name>`
-- `--map-in-progress <platform-name>`
-- `--map-in-review <platform-name>`
-
-Adapter flags:
-- GitHub: `--github-repo <owner/repo>`, optional `--github-project-number <number>`
-- Plane: `--plane-workspace-slug <slug>`, `--plane-project-id <uuid>`, optional `--plane-order-field <field>`
-- Linear: scope `--linear-team-id <id>` **or** `--linear-project-id <id>`, optional ordering `--linear-view-id <id>`
-- Planka: `--planka-board-id <id>`, `--planka-backlog-list-id <id>`
-
-### Autopilot decision model (single command)
-
-`autopilot-tick` decides and executes one of three outcomes per run:
-
-- **continue/start**
-  - if no active work exists and next backlog item is assigned to self, it starts it and returns current payload.
-- **blocked**
-  - if active work is stale and blocker evidence exists, it moves the ticket to Blocked (`ask`) and automatically loads `next`.
-- **completed**
-  - if strong completion proof marker exists, it completes the ticket (`complete` -> In Review) and automatically loads `next`.
-
-Supported flags:
-
-- `--dry-run` -> evaluate decision without mutating ticket state
-
-### Cron dispatcher (session-per-ticket)
-
-Use `kanban-workflow cron-dispatch` for scheduled runs. It wraps `autopilot-tick` and adds session routing:
-
-- dispatcher responsibilities
-  - persist ticket->session state in `.tmp/kwf-session-map.json`
-  - reuse the same OpenClaw worker session key while the same ticket stays `in_progress`
-  - route worker turns via `openclaw gateway call agent` with `sessionKey=agent:<worker-agent-id>:<ticket-session-id>` where `<ticket-session-id>` is compact and human-readable when a key like `JULES-177` is available
-  - dispatch a **do-work-now** payload with full context (`id`, `title`, `body`, latest `comments`, `attachments`, linked tickets/URLs)
-  - load `WORKER.md` (repo root) into each worker task-start payload as mandatory runtime guidance
-  - enforce strict worker contract before any mutation is applied
-  - emit machine-readable execution records (`applied` | `parse_error` | `mutation_error`) for observability
-- worker responsibilities
-  - perform concrete work during the turn unless truly blocked
-  - include an `EVIDENCE` section (what was executed, key output, changed files)
-  - end with exactly one terminal command on the final non-empty line:
-    - `kanban-workflow continue --text ...`
-    - `kanban-workflow blocked --text ...`
-    - `kanban-workflow completed --result ...`
-  - avoid boilerplate progress spam
-- strict contracts
-  - parser requires exactly one terminal command, valid flags, and final-line placement
-  - continue proof-gate: `continue` is rejected unless EVIDENCE contains concrete execution proof
-- lifecycle handling
-  - on `blocked`/`completed`, finalize old ticket session and start/reuse mapped session for next ticket
-  - no-work ticks emit no worker dispatch actions; first no-work hit in a streak sends a Rocket.Chat alert to `simon.vanlaak` (configurable via env)
-  - restart-safe map loading (invalid/missing map falls back to empty state)
-
-`setup --autopilot-install-cron` currently installs an OpenClaw message-based cron trigger that calls cron-dispatch. For token-free dispatcher runs, prefer this repo-local script:
-
-- `/root/.openclaw/workspace/skills/kanban-workflow/scripts/dispatcher-cron.sh` (runs `kanban-workflow cron-dispatch --agent kanban-workflow-worker` every 5 minutes)
-
-The OpenClaw cron job used for dispatcher runs has been disabled in favor of this system job.
-### Completion policy
-
-Auto-complete from comment markers is disabled.
-Completion must come from explicit worker terminal action:
-
-- `kanban-workflow completed --result "what was done"`
-
-### Continuous status updates
-
-Autopilot tick no longer posts boilerplate "continuing work" comments. To reduce noise, status updates are emitted only through explicit worker terminal actions:
-
-- `kanban-workflow continue --text "update + next steps"`
-- `kanban-workflow blocked --text "block reason + concrete ask"`
-- `kanban-workflow completed --result "what was done"`
-
-(Advanced helper remains available: `runProgressAutoUpdates()` in `src/automation/progress_updates.ts`, but it is not part of the default cron-dispatch loop.)
-
-## Security model
-
-Kanban Workflow **does not** run interactive OAuth flows or persist secrets. Authentication is handled by the adapter’s CLI/script (often via an existing CLI session or an API key environment variable).
-
-Instead, it shells out to a platform-specific CLI (e.g. `gh`, `plane`, `scripts/linear_json.sh`, `planka-cli`) and therefore acts with the **same privileges as that CLI session** on the host machine.
-
-Implications:
-- Anything the authenticated CLI can read/write, this skill can read/write.
-- Keep your CLI sessions scoped appropriately (least privilege), and treat `config/kanban-workflow.json` as sensitive metadata (it contains IDs, not secrets).
-
-See `SECURITY.md` for more detail.
-
-## Development / install
-
-Prereqs:
-- Node.js + npm
-- Adapter CLI(s) for the platform you plan to use:
-  - GitHub: `gh`
-  - Planka: `planka-cli`
-  - Plane: ClawHub skill `plane` (binary `plane`; requires `PLANE_API_KEY` + `PLANE_WORKSPACE`)
-  - Linear: `curl` + `jq` + `LINEAR_API_KEY` (via ClawHub skill `linear`); Kanban Workflow calls `scripts/linear_json.sh`
-
-Install dependencies:
 ```bash
 npm ci
-```
-
-Run tests:
-```bash
+npx tsc --noEmit
 npm test
 ```
 
-Build:
+Run CLI:
+
 ```bash
-npm run build
+npm run kanban-workflow -- <command>
 ```
-
-## Adapters
-
-Adapters live in `src/adapters/`.
-
-- GitHub: uses **GitHub CLI** (`gh`, incl. `gh api`)
-- Planka: uses **planka-cli** (https://github.com/voydz/planka-cli)
-- Plane: uses ClawHub skill **`plane`** (owner: `vaguilera-jinko`) (binary `plane`; env: `PLANE_API_KEY`, `PLANE_WORKSPACE`).
-- Linear: uses ClawHub skill **`linear`** (ManuelHettich) auth convention (`LINEAR_API_KEY`) via this repo’s `scripts/linear_json.sh` wrapper.
-
-Notes:
-- Kanban Workflow itself does **not** manage platform auth flows.
-
-## Status
-
-Early scaffolding / prototype. Interfaces and CLI surface are expected to change.
