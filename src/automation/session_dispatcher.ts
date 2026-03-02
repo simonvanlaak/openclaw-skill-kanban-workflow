@@ -67,7 +67,7 @@ type TicketContext = {
   links: Array<{ id?: string; title?: string; url?: string; relation?: string }>;
 };
 
-export type DispatcherPlan = {
+export type WorkflowLoopPlan = {
   map: SessionMap;
   actions: DispatchAction[];
   activeTicketId: string | null;
@@ -437,11 +437,11 @@ function buildWorkInstruction(ticketId: string, payload: any, sessionLabel: stri
   ].join('\n');
 }
 
-export function buildDispatcherPlan(params: {
+export function buildWorkflowLoopPlan(params: {
   autopilotOutput: any;
   previousMap: SessionMap;
   now: Date;
-}): DispatcherPlan {
+}): WorkflowLoopPlan {
   const nowIso = params.now.toISOString();
   const map: SessionMap = JSON.parse(JSON.stringify(params.previousMap || emptyMap()));
   if (!map.sessionsByTicket) map.sessionsByTicket = {};

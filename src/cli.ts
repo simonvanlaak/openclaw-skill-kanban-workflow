@@ -12,7 +12,7 @@ import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { lockfile } from './automation/lockfile.js';
 import {
   applyWorkerCommandToSessionMap,
-  buildDispatcherPlan,
+  buildWorkflowLoopPlan,
   loadSessionMap,
   saveSessionMap,
   type SessionMap,
@@ -90,7 +90,7 @@ type NeedsMyAttentionPort = {
 
 const AUTOPILOT_CURRENT_ID_PATH = '.tmp/kanban_autopilot_current_id';
 const PLANE_ENV_HELPER = '/root/.openclaw/workspace/scripts/plane_env.sh';
-const DISPATCHER_AGENT_ID = 'kanban-workflow-dispatcher';
+const WORKFLOW_LOOP_AGENT_ID = 'kanban-workflow-workflow-loop';
 const WORKER_AGENT_ID = 'kanban-workflow-worker';
 const DEFAULT_NO_WORK_ALERT_CHANNEL = 'rocketchat';
 const DEFAULT_NO_WORK_ALERT_TARGET = '@simon.vanlaak';
@@ -100,9 +100,9 @@ const DEFAULT_WORKER_BACKGROUND_TIMEOUT_MS = 15 * 60_000;
 
 function isBackgroundWorkerDelegationAllowed(agentId: string): boolean {
   // Background delegation produces a visible “No final worker response after …” notice.
-  // That behavior is acceptable for the human-facing dispatcher, but it is too noisy for
+  // That behavior is acceptable for the human-facing workflow-loop, but it is too noisy for
   // per-ticket worker turns (it ends up as spammy comments on the work item).
-  if (agentId === DISPATCHER_AGENT_ID) return true;
+  if (agentId === WORKFLOW_LOOP_AGENT_ID) return true;
   if (agentId === WORKER_AGENT_ID) return false;
 
   // Default: disabled. (If we ever need it for other agents, add an explicit allowlist.)
@@ -984,9 +984,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           'cron',
           'add',
           '--name',
-          'kanban-workflow dispatcher',
+          'kanban-workflow workflow-loop',
           '--agent',
-          DISPATCHER_AGENT_ID,
+          WORKFLOW_LOOP_AGENT_ID,
           '--session',
           'isolated',
           '--cron',
@@ -1037,7 +1037,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const dryRun = Boolean(flags['dry-run']);
       const output = await runAutopilotCommand(adapter, dryRun, requeueTargetStage);
       const previousMap = await loadSessionMap();
-      const plan = buildDispatcherPlan({ autopilotOutput: output, previousMap, now: new Date() });
+      const plan = buildWorkflowLoopPlan({ autopilotOutput: output, previousMap, now: new Date() });
 
       const activeCarryForward =
         !dryRun &&
@@ -1175,7 +1175,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           if (dispatched.kind === 'delegated') {
             // IMPORTANT: Do not write delegation timeout notices back to the ticket.
             // They are human-facing runtime artifacts and become spam when posted as comments.
-            // The dispatcher will pick up the background result on a later cron turn.
+            // The workflow-loop will pick up the background result on a later cron turn.
             execution.push({
               sessionId: action.sessionId,
               ticketId: action.ticketId,
@@ -1209,7 +1209,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       io.stdout.write(
         `${JSON.stringify({
-          dispatch: {
+          workflowLoop: {
             dryRun,
             actions: plan.actions,
             execution,

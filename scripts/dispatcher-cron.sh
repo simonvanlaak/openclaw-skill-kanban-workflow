@@ -2,7 +2,7 @@
 set -euo pipefail
 
 LOG_DIR="/var/log/openclaw"
-LOG_FILE="$LOG_DIR/kanban-workflow-plane-dispatch.log"
+LOG_FILE="$LOG_DIR/kanban-workflow-plane-workflow-loop.log"
 SKILL_DIR="/root/.openclaw/workspace/skills/kanban-workflow"
 
 mkdir -p "$LOG_DIR"
@@ -18,7 +18,7 @@ source /root/.openclaw/workspace/scripts/plane_env.sh
 : "${KWF_WORKER_BACKGROUND_DELEGATION:=false}"
 
 {
-  echo "[$(date -u +%FT%TZ)] START dispatcher-cron.sh"
+  echo "[$(date -u +%FT%TZ)] START workflow-loop-cron.sh"
 
   # If Codex daily usage is already at threshold, skip this tick to avoid churn during quota pressure.
   usage_json="$(openclaw status --json --usage 2>/tmp/kanban-workflow-usage.err || true)"
@@ -72,13 +72,13 @@ PY
 <<< "$usage_json")"
 
     if [ -n "$usage_decision" ] && [[ "$usage_decision" == BLOCK* ]]; then
-      echo "[dispatcher-cron] usage guard skipped run: $usage_decision"
-      echo "[$(date -u +%FT%TZ)] END dispatcher-cron.sh (skipped)"
+      echo "[workflow-loop-cron] usage guard skipped run: $usage_decision"
+      echo "[$(date -u +%FT%TZ)] END workflow-loop-cron.sh (skipped)"
       exit 0
     fi
   fi
 
   cd "$SKILL_DIR"
   npm run -s kanban-workflow -- workflow-loop
-  echo "[$(date -u +%FT%TZ)] END dispatcher-cron.sh"
+  echo "[$(date -u +%FT%TZ)] END workflow-loop-cron.sh"
 } >> "$LOG_FILE" 2>&1

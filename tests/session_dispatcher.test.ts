@@ -1,13 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyWorkerCommandToSessionMap, buildDispatcherPlan } from '../src/automation/session_dispatcher.js';
+import { applyWorkerCommandToSessionMap, buildWorkflowLoopPlan } from '../src/automation/session_dispatcher.js';
 
-describe('session dispatcher', () => {
+describe('session workflow-loop', () => {
   it('reuses same session for same in_progress ticket, then finalizes and starts new session on completion', () => {
     const t1 = new Date('2026-02-28T13:00:00.000Z');
     const initialMap = { version: 1 as const, sessionsByTicket: {} };
 
-    const first = buildDispatcherPlan({
+    const first = buildWorkflowLoopPlan({
       previousMap: initialMap,
       now: t1,
       autopilotOutput: {
@@ -44,7 +44,7 @@ describe('session dispatcher', () => {
     expect(first.actions[0]?.text).toContain('"links"');
     const a1Session = first.actions[0]!.sessionId;
 
-    const second = buildDispatcherPlan({
+    const second = buildWorkflowLoopPlan({
       previousMap: first.map,
       now: new Date('2026-02-28T13:05:00.000Z'),
       autopilotOutput: {
@@ -54,7 +54,7 @@ describe('session dispatcher', () => {
 
     expect(second.actions[0]?.sessionId).toBe(a1Session);
 
-    const third = buildDispatcherPlan({
+    const third = buildWorkflowLoopPlan({
       previousMap: second.map,
       now: new Date('2026-02-28T13:10:00.000Z'),
       autopilotOutput: {
@@ -73,7 +73,7 @@ describe('session dispatcher', () => {
   });
 
   it('refreshes existing worker session label when ticket title changes', () => {
-    const first = buildDispatcherPlan({
+    const first = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T14:00:00.000Z'),
       autopilotOutput: {
@@ -82,7 +82,7 @@ describe('session dispatcher', () => {
       },
     });
 
-    const second = buildDispatcherPlan({
+    const second = buildWorkflowLoopPlan({
       previousMap: first.map,
       now: new Date('2026-02-28T14:05:00.000Z'),
       autopilotOutput: {
@@ -98,7 +98,7 @@ describe('session dispatcher', () => {
   });
 
   it('uses linked human-readable issue keys for worker session id + label', () => {
-    const plan = buildDispatcherPlan({
+    const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T14:10:00.000Z'),
       autopilotOutput: {
@@ -120,7 +120,7 @@ describe('session dispatcher', () => {
   });
 
   it('extracts issue keys from top-level links when adapter emits links outside item.linked', () => {
-    const plan = buildDispatcherPlan({
+    const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T14:11:00.000Z'),
       autopilotOutput: {
@@ -141,7 +141,7 @@ describe('session dispatcher', () => {
   });
 
   it('upgrades legacy worker session ids to human-readable keys when available', () => {
-    const plan = buildDispatcherPlan({
+    const plan = buildWorkflowLoopPlan({
       previousMap: {
         version: 1 as const,
         active: {
@@ -184,7 +184,7 @@ describe('session dispatcher', () => {
       },
     };
 
-    const plan = buildDispatcherPlan({
+    const plan = buildWorkflowLoopPlan({
       previousMap: seededMap,
       now: new Date('2026-02-28T13:15:00.000Z'),
       autopilotOutput: {
@@ -208,7 +208,7 @@ describe('session dispatcher', () => {
       },
     };
 
-    const plan = buildDispatcherPlan({
+    const plan = buildWorkflowLoopPlan({
       previousMap: seededMap,
       now: new Date('2026-02-28T13:20:00.000Z'),
       autopilotOutput: { kind: 'no_work' },
@@ -222,13 +222,13 @@ describe('session dispatcher', () => {
   });
 
   it('keeps same no-work streak start across repeated no-work ticks', () => {
-    const first = buildDispatcherPlan({
+    const first = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T13:20:00.000Z'),
       autopilotOutput: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
     });
 
-    const second = buildDispatcherPlan({
+    const second = buildWorkflowLoopPlan({
       previousMap: first.map,
       now: new Date('2026-02-28T13:25:00.000Z'),
       autopilotOutput: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
