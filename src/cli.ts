@@ -229,6 +229,12 @@ type WorkerDelegationState =
   | { kind: 'running'; meta: WorkerDelegationMeta }
   | { kind: 'completed'; meta: WorkerDelegationMeta; workerOutput: string; raw: string };
 
+type AgentCallParsed = {
+  workerOutput: string;
+  raw: string;
+  stderr: string;
+};
+
 function resolvePositiveTimeoutMs(raw: string | undefined, fallback: number): number {
   const n = Number(raw ?? '');
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -287,8 +293,9 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: unknown): { workerOutput: string; raw: string } {
+function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: unknown): AgentCallParsed {
   const raw = String(stdoutRaw ?? '').trim();
+  const stderr = String(stderrRaw ?? '').trim();
   let workerOutput = raw;
 
   try {
@@ -303,9 +310,7 @@ function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: unknown):
     // fallback to raw stdout
   }
 
-  const stderr = String(stderrRaw ?? '').trim();
-  const combined = [workerOutput.trim(), stderr].filter((x) => x.length > 0).join('\n');
-  return { workerOutput: combined, raw };
+  return { workerOutput: workerOutput.trim(), raw, stderr };
 }
 
 function collectErrText(err: unknown): string {
@@ -485,7 +490,7 @@ async function dispatchWorkerTurn(params: {
     const parsed = parseWorkerOutputFromAgentCall(run.stdout, run.stderr);
     if (hasTimedOutFallbackMessage(parsed.workerOutput) || hasTimedOutFallbackMessage(parsed.raw)) {
       if (!allowBackgroundDelegation) {
-        return { kind: 'immediate', workerOutput: '', raw: '' };
+        throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
       }
 
       await startWorkerDelegation({
@@ -513,7 +518,7 @@ async function dispatchWorkerTurn(params: {
     if (!isRequestTimeoutErr(err)) throw err;
 
     if (!allowBackgroundDelegation) {
-      return { kind: 'immediate', workerOutput: '', raw: '' };
+      throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
     }
 
     await startWorkerDelegation({
@@ -588,6 +593,24 @@ function parseDecisionChoice(raw: string): DecisionChoice | null {
   return null;
 }
 
+function coerceDecisionChoice(input: {
+  decision: DecisionChoice | null;
+  facts: WorkerReportFacts;
+  continueCount: number;
+}): DecisionChoice {
+  let decision: DecisionChoice = input.decision ?? 'blocked';
+  if (input.facts.missing.length > 0 && decision !== 'blocked') {
+    decision = 'blocked';
+  }
+  if (decision === 'completed' && !(input.facts.hasVerification && input.facts.hasResolvedBlockers)) {
+    decision = 'blocked';
+  }
+  if (decision === 'continue' && input.continueCount >= 2) {
+    decision = 'blocked';
+  }
+  return decision;
+}
+
 function continueCountForTicket(map: SessionMap, ticketId: string): number {
   const entry = (map.sessionsByTicket ?? {})[ticketId] as any;
   const n = Number(entry?.continueCount ?? 0);
@@ -617,7 +640,9 @@ async function decideWithAgent(params: {
   const mapAny = params.map as any;
   const decisionAgentId = (process.env.KWF_DECISION_AGENT_ID ?? 'kanban-workflow-decision').trim() || 'kanban-workflow-decision';
   const maxTicketsPerSession = 5;
-  const maxChars = 20_000;
+  const maxContextTokens = resolvePositiveTimeoutMs(process.env.KWF_DECISION_CONTEXT_TOKENS, 272_000);
+  const charsPerToken = 4;
+  const maxChars = maxContextTokens * charsPerToken;
   const rotateAt = 0.5;
 
   const state = (mapAny.decisionSession ??= {
@@ -1001,7 +1026,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         ticketId: string;
         parsed: WorkerTerminalCommand | null;
         workerOutput: string;
-        outcome: 'applied' | 'parse_error' | 'mutation_error' | 'delegated_started' | 'delegated_running';
+        outcome: 'applied' | 'mutation_error' | 'delegated_started' | 'delegated_running';
         detail?: string;
       }> = [];
       let noWorkAlert: NoWorkAlertResult | null = null;
@@ -1036,17 +1061,12 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           facts = extractWorkerReportFacts(report);
         }
 
-        let decision = await decideWithAgent({ map: plan.map, ticketId: action.ticketId, report, facts });
-        if (!decision) decision = 'blocked';
-        if (facts.missing.length > 0 && decision !== 'blocked') {
-          decision = 'blocked';
-        }
-        if (decision === 'completed' && !(facts.hasVerification && facts.hasResolvedBlockers)) {
-          decision = 'blocked';
-        }
-        if (decision === 'continue' && continueCountForTicket(plan.map, action.ticketId) >= 2) {
-          decision = 'blocked';
-        }
+        const rawDecision = await decideWithAgent({ map: plan.map, ticketId: action.ticketId, report, facts });
+        const decision = coerceDecisionChoice({
+          decision: rawDecision,
+          facts,
+          continueCount: continueCountForTicket(plan.map, action.ticketId),
+        });
 
         const parsed: WorkerTerminalCommand =
           decision === 'continue'
@@ -1111,12 +1131,6 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
               continue;
             }
 
-            if (activeCarryForward) {
-              // Poll-only mode while a worker ticket is already active.
-              // We still run housekeeping checks above (running/completed background status),
-              // but we do not trigger a new worker turn on this tick.
-              continue;
-            }
           }
 
           const dispatched = await dispatchWorkerTurn({
@@ -1159,7 +1173,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
         await saveSessionMap(plan.map);
 
-        if (activeCarryForward && execution.length === 0) {
+        if (activeCarryForward && execution.length > 0 && execution.every((x) => x.outcome === 'delegated_running')) {
           // Quiet poll when active ticket has no new completed worker output.
           return 0;
         }
