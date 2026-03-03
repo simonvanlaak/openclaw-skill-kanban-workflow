@@ -175,6 +175,72 @@ describe('session workflow-loop', () => {
     expect(plan.map.sessionsByTicket['45a8585d-9075-44de-bcd2-196e6793979a']?.sessionId).toBe('jules-177');
   });
 
+  it('treats main/default sessions as legacy and upgrades to per-ticket key sessions', () => {
+    const fromMain = buildWorkflowLoopPlan({
+      previousMap: {
+        version: 1 as const,
+        active: {
+          ticketId: '45a8585d-9075-44de-bcd2-196e6793979a',
+          sessionId: 'main',
+        },
+        sessionsByTicket: {
+          '45a8585d-9075-44de-bcd2-196e6793979a': {
+            sessionId: 'main',
+            lastState: 'in_progress' as const,
+            lastSeenAt: '2026-02-28T14:10:00.000Z',
+          },
+        },
+      },
+      now: new Date('2026-02-28T14:13:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: '45a8585d-9075-44de-bcd2-196e6793979a', inProgressIds: ['45a8585d-9075-44de-bcd2-196e6793979a'] },
+        nextTicket: {
+          kind: 'item',
+          item: {
+            id: '45a8585d-9075-44de-bcd2-196e6793979a',
+            title: 'Improve kwf worker session naming',
+            linked: [{ title: 'JULES-177', relation: 'mentioned' }],
+          },
+        },
+      },
+    });
+
+    expect(fromMain.actions[0]?.sessionId).toBe('jules-177');
+    expect(fromMain.map.active?.sessionId).toBe('jules-177');
+
+    const fromDefault = buildWorkflowLoopPlan({
+      previousMap: {
+        version: 1 as const,
+        active: {
+          ticketId: '45a8585d-9075-44de-bcd2-196e6793979a',
+          sessionId: 'kanban-workflow-worker:default',
+        },
+        sessionsByTicket: {
+          '45a8585d-9075-44de-bcd2-196e6793979a': {
+            sessionId: 'kanban-workflow-worker:default',
+            lastState: 'in_progress' as const,
+            lastSeenAt: '2026-02-28T14:10:00.000Z',
+          },
+        },
+      },
+      now: new Date('2026-02-28T14:14:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: '45a8585d-9075-44de-bcd2-196e6793979a', inProgressIds: ['45a8585d-9075-44de-bcd2-196e6793979a'] },
+        nextTicket: {
+          kind: 'item',
+          item: {
+            id: '45a8585d-9075-44de-bcd2-196e6793979a',
+            title: 'Improve kwf worker session naming',
+            linked: [{ title: 'JULES-177', relation: 'mentioned' }],
+          },
+        },
+      },
+    });
+
+    expect(fromDefault.actions[0]?.sessionId).toBe('jules-177');
+    expect(fromDefault.map.active?.sessionId).toBe('jules-177');
+  });
+
   it('switches ticket on blocked transition with finalize + new work action', () => {
     const seededMap = {
       version: 1 as const,
