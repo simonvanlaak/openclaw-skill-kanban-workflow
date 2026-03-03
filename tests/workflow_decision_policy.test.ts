@@ -5,6 +5,7 @@ import {
   extractWorkerReportFacts,
   parseDecisionChoice,
   shouldQuietPollAfterCarryForward,
+  summarizeReportForComment,
 } from '../src/workflow/decision_policy.js';
 
 describe('workflow decision policy', () => {
@@ -78,5 +79,27 @@ describe('workflow decision policy', () => {
     expect(parseDecisionChoice('I think continue')).toBeNull();
     expect(parseDecisionChoice('not blocked, continue')).toBeNull();
     expect(parseDecisionChoice('{"decision":"completed"}')).toBe('completed');
+  });
+
+  it('preserves markdown formatting when summarizing report comments', () => {
+    const report = [
+      '# Status Report',
+      '',
+      '## Verification Evidence',
+      '- item one',
+      '- item two',
+      '',
+      '## Blockers',
+      '| Blocker | Status |',
+      '|---|---|',
+      '| SSH | OPEN |',
+    ].join('\n');
+
+    const out = summarizeReportForComment(report, 1000);
+    expect(out).toContain('# Status Report');
+    expect(out).toContain('## Verification Evidence');
+    expect(out).toContain('- item one');
+    expect(out).toContain('| Blocker | Status |');
+    expect(out).toContain('\n');
   });
 });

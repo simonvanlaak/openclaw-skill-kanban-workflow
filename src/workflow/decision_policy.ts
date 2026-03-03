@@ -85,9 +85,14 @@ export function coerceDecisionChoice(input: {
 }
 
 export function summarizeReportForComment(report: string, maxChars = 1200): string {
-  const compact = String(report ?? '').trim().replace(/\s+/g, ' ');
-  if (!compact) return 'No report details provided.';
-  return compact.length > maxChars ? `${compact.slice(0, maxChars).trimEnd()}...` : compact;
+  const normalized = String(report ?? '').replace(/\r\n?/g, '\n').trim();
+  if (!normalized) return 'No report details provided.';
+  if (normalized.length <= maxChars) return normalized;
+
+  const sliced = normalized.slice(0, maxChars);
+  const newlineCut = sliced.lastIndexOf('\n');
+  const cutAt = newlineCut >= Math.floor(maxChars * 0.6) ? newlineCut : maxChars;
+  return `${sliced.slice(0, cutAt).trimEnd()}...`;
 }
 
 export function shouldQuietPollAfterCarryForward(params: {
