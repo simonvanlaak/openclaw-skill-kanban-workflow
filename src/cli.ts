@@ -24,6 +24,10 @@ import {
   type RocketChatStatusUpdate,
 } from './workflow/rocketchat_status.js';
 import {
+  reconcileQueuePositionComments,
+  type QueuePositionReconcileResult,
+} from './workflow/queue_position_comments.js';
+import {
   archiveStaleBlockedWorkerSessions,
   buildRetryPrompt,
 } from './workflow/ticket_runtime.js';
@@ -478,6 +482,27 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       }> = [];
       let noWorkAlert: NoWorkAlertResult | null = null;
       let rocketChatStatusUpdate: RocketChatStatusUpdate | null = null;
+      let queuePositionUpdate: QueuePositionReconcileResult | null = null;
+
+      const recordCompletedWorkDuration = (ticketId: string, completedAt: Date): void => {
+        const entry = plan.map.sessionsByTicket?.[ticketId];
+        const startedAtIso = entry?.workStartedAt;
+        if (!startedAtIso) return;
+        const startedMs = Date.parse(startedAtIso);
+        const endedMs = completedAt.getTime();
+        if (!Number.isFinite(startedMs) || endedMs <= startedMs) return;
+        const durationMs = endedMs - startedMs;
+        const queueState =
+          plan.map.queuePosition ??
+          (plan.map.queuePosition = {
+            commentsByTicket: {},
+            recentCompletionDurationsMs: [],
+          });
+        const samples = Array.isArray(queueState.recentCompletionDurationsMs)
+          ? queueState.recentCompletionDurationsMs
+          : [];
+        queueState.recentCompletionDurationsMs = [...samples, durationMs].slice(-3);
+      };
 
       const applyWorkerOutput = async (action: { sessionId: string; ticketId: string; projectId?: string }, workerOutput: string, detailPrefix?: string): Promise<void> => {
         let payload = workerOutput;
@@ -541,7 +566,11 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             await ask(adapter, action.ticketId, parsed.text);
           }
 
-          applyWorkerCommandToSessionMap(plan.map, action.ticketId, parsed, new Date());
+          const appliedAt = new Date();
+          if (parsed.kind === 'completed') {
+            recordCompletedWorkDuration(action.ticketId, appliedAt);
+          }
+          applyWorkerCommandToSessionMap(plan.map, action.ticketId, parsed, appliedAt);
           execution.push({
             sessionId: action.sessionId,
             ticketId: action.ticketId,
@@ -628,6 +657,25 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           dryRun,
         });
 
+        try {
+          queuePositionUpdate = await reconcileQueuePositionComments({
+            adapter,
+            map: plan.map,
+            dryRun,
+          });
+        } catch (err: any) {
+          queuePositionUpdate = {
+            outcome: 'error',
+            queuedTickets: 0,
+            activeOffset: 0,
+            created: 0,
+            updated: 0,
+            deleted: 0,
+            unchanged: 0,
+            errors: [err?.message ?? String(err)],
+          };
+        }
+
         rocketChatStatusUpdate = await maybeUpdateRocketChatStatusFromWorkflowLoop({
           output,
           previousMap,
@@ -654,6 +702,25 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           dryRun,
         });
 
+        try {
+          queuePositionUpdate = await reconcileQueuePositionComments({
+            adapter,
+            map: plan.map,
+            dryRun,
+          });
+        } catch (err: any) {
+          queuePositionUpdate = {
+            outcome: 'error',
+            queuedTickets: 0,
+            activeOffset: 0,
+            created: 0,
+            updated: 0,
+            deleted: 0,
+            unchanged: 0,
+            errors: [err?.message ?? String(err)],
+          };
+        }
+
         rocketChatStatusUpdate = await maybeUpdateRocketChatStatusFromWorkflowLoop({
           output,
           previousMap,
@@ -670,6 +737,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             actions: plan.actions,
             execution,
             noWorkAlert,
+            queuePositionUpdate,
             rocketChatStatusUpdate,
             activeTicketId: plan.activeTicketId,
             mapPath: '.tmp/kwf-session-map.json',

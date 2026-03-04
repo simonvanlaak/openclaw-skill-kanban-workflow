@@ -75,6 +75,8 @@ export type WorkItemReadPort = {
 export type WorkItemWritePort = {
   setStage(id: string, stage: StageKey): Promise<void>;
   addComment(id: string, body: string): Promise<void>;
+  updateComment(id: string, commentId: string, body: string): Promise<void>;
+  deleteComment(id: string, commentId: string): Promise<void>;
   createInBacklogAndAssignToSelf(input: CreateInput): Promise<{ id: string; url?: string }>;
 };
 

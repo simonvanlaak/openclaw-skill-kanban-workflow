@@ -481,7 +481,7 @@ describe('PlaneAdapter', () => {
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
-        'https://plane.example/api/v1/workspaces/ws/projects/proj/issues/i9/comments/',
+        'https://plane.example/api/v1/workspaces/ws/projects/proj/work-items/i9/comments/',
         {
           method: 'POST',
           headers: {

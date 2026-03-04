@@ -73,12 +73,21 @@ function extractDisplayIdFromSessionLabel(label: string): string | null {
   return first;
 }
 
+function extractIssueKey(raw: string | undefined): string | null {
+  const clean = cleanOneLine(raw ?? '');
+  if (!clean) return null;
+  const match = clean.match(/\b([a-z][a-z0-9]+-\d+)\b/i);
+  if (!match?.[1]) return null;
+  return match[1].toUpperCase();
+}
+
 function desiredMessageFromLoop(params: {
   activeTicketId: string | null;
   activeTitle?: string;
   tickKind?: string;
   reasonCode?: string;
   sessionLabel?: string;
+  sessionId?: string;
 }): string {
   if (params.tickKind === 'no_work') {
     // Make idle status human-friendly, avoid technical reason codes.
@@ -91,9 +100,15 @@ function desiredMessageFromLoop(params: {
 
   if (!params.activeTicketId) return 'waiting for new assignment';
 
-  const displayId = extractDisplayIdFromSessionLabel(params.sessionLabel ?? '') ?? params.activeTicketId;
+  const displayIdFromLabel = extractDisplayIdFromSessionLabel(params.sessionLabel ?? '');
+  const displayId = 
+    extractIssueKey(displayIdFromLabel ?? undefined) ??
+    extractIssueKey(params.sessionId) ??
+    extractIssueKey(params.activeTicketId);
   const title = cleanOneLine(params.activeTitle ?? '');
-  const raw = title ? `working on ${displayId}: ${title}` : `working on ${displayId}`;
+  const raw = displayId
+    ? (title ? `working on ${displayId}: ${title}` : `working on ${displayId}`)
+    : (title ? `working on ${title}` : 'working on assigned ticket');
 
   // Keep it short so Rocket.Chat status UI stays readable.
   return raw.length > 96 ? `${raw.slice(0, 93)}...` : raw;
@@ -143,6 +158,13 @@ export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params: {
       : undefined;
 
   const sessionLabel = activeTicketId ? params.map.sessionsByTicket?.[activeTicketId]?.sessionLabel : undefined;
+  const active = params.map.active;
+  let sessionId: string | undefined;
+  if (activeTicketId && active && active.ticketId === activeTicketId) {
+    sessionId = active.sessionId;
+  } else if (activeTicketId) {
+    sessionId = params.map.sessionsByTicket?.[activeTicketId]?.sessionId;
+  }
 
   const desiredMessage = desiredMessageFromLoop({
     activeTicketId,
@@ -150,6 +172,7 @@ export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params: {
     tickKind,
     reasonCode,
     sessionLabel,
+    sessionId,
   });
 
   const prev = (params.previousMap as any)?.rocketChatStatus?.lastMessage;

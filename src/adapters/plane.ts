@@ -266,10 +266,11 @@ export class PlaneAdapter implements Adapter {
     }
 
     const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
-    const url = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+    const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
+    const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
 
     const commentHtml = this.renderCommentHtml(body);
-    const res = await fetch(url, {
+    let res = await fetch(workItemUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -277,6 +278,18 @@ export class PlaneAdapter implements Adapter {
       },
       body: JSON.stringify({ comment_html: commentHtml }),
     });
+
+    // Back-compat fallback for older Plane deployments.
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(issueUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ comment_html: commentHtml }),
+      });
+    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
@@ -292,14 +305,25 @@ export class PlaneAdapter implements Adapter {
     }
 
     const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
-    const url = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+    const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
+    const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
 
-    const res = await fetch(url, {
+    let res = await fetch(workItemUrl, {
       method: 'GET',
       headers: {
         'x-api-key': apiKey,
       },
     });
+
+    // Back-compat fallback for older Plane deployments.
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(issueUrl, {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+        },
+      });
+    }
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
@@ -310,6 +334,81 @@ export class PlaneAdapter implements Adapter {
     if (Array.isArray(json)) return json;
     if (json && typeof json === 'object' && Array.isArray((json as any).results)) return (json as any).results;
     return [];
+  }
+
+  private async updateCommentViaApi(projectId: string, issueId: string, commentId: string, body: string): Promise<void> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane comments API');
+    }
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const workItemUrl =
+      `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}` +
+      `/work-items/${String(issueId)}/comments/${String(commentId)}/`;
+    const issueUrl =
+      `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}` +
+      `/issues/${String(issueId)}/comments/${String(commentId)}/`;
+    const commentHtml = this.renderCommentHtml(body);
+
+    let res = await fetch(workItemUrl, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify({ comment_html: commentHtml }),
+    });
+
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(issueUrl, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify({ comment_html: commentHtml }),
+      });
+    }
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Plane comments API failed (update): HTTP ${res.status} ${txt}`);
+    }
+  }
+
+  private async deleteCommentViaApi(projectId: string, issueId: string, commentId: string): Promise<void> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane comments API');
+    }
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const workItemUrl =
+      `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}` +
+      `/work-items/${String(issueId)}/comments/${String(commentId)}/`;
+    const issueUrl =
+      `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}` +
+      `/issues/${String(issueId)}/comments/${String(commentId)}/`;
+
+    let res = await fetch(workItemUrl, {
+      method: 'DELETE',
+      headers: {
+        'x-api-key': apiKey,
+      },
+    });
+
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(issueUrl, {
+        method: 'DELETE',
+        headers: {
+          'x-api-key': apiKey,
+        },
+      });
+    }
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Plane comments API failed (delete): HTTP ${res.status} ${txt}`);
+    }
   }
 
   private stripHtml(input: string): string {
@@ -697,6 +796,20 @@ export class PlaneAdapter implements Adapter {
 
     // Primary path: direct Plane API comments endpoint (avoids CLI 405 behavior).
     await this.postCommentViaApi(projectId, String(id), msg);
+  }
+
+  async updateComment(id: string, commentId: string, body: string): Promise<void> {
+    const projectId = await this.resolveProjectIdForIssue(id, 'updateComment');
+    const msg = String(body || '').trim();
+    if (!msg) throw new Error('updateComment requires non-empty body');
+    if (!String(commentId || '').trim()) throw new Error('updateComment requires commentId');
+    await this.updateCommentViaApi(projectId, String(id), String(commentId), msg);
+  }
+
+  async deleteComment(id: string, commentId: string): Promise<void> {
+    const projectId = await this.resolveProjectIdForIssue(id, 'deleteComment');
+    if (!String(commentId || '').trim()) throw new Error('deleteComment requires commentId');
+    await this.deleteCommentViaApi(projectId, String(id), String(commentId));
   }
 
   async createInBacklogAndAssignToSelf(input: { title: string; body: string; projectId?: string }): Promise<{ id: string; url?: string }> {

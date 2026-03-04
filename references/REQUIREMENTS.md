@@ -113,7 +113,6 @@ Behavior for optional fields:
 ### 5.3 Comment/stage mutation semantics
 
 Workflow-level mutation outcomes remain:
-- progress update comment (no stage change)
 - clarification/block comment + move to `stage:blocked`
 - completion comment + move to `stage:in-review`
 - start/move to `stage:in-progress`
@@ -294,6 +293,77 @@ Status: active
 
 - Persist validation and decision details to runtime logs only.
 - Do not write separate local artifact files for worker decision payloads.
+
+## 11) Queue position dispatcher comments (active, 2026-03-04)
+
+Problem:
+- Users need visibility into when a queued ticket is likely to be picked up.
+
+Requirement:
+- After backlog prioritization/queue building in `workflow-loop`, dispatcher must maintain a queue-position comment per queued ticket.
+
+Scope:
+- Apply to all queued tickets in `stage:todo` assigned to the authenticated worker.
+- Do not keep a queue-position comment on the active `stage:in-progress` ticket.
+
+Comment ownership and identity:
+- Queue-position comments are dispatcher-owned and must include a stable internal marker so they can be found and updated deterministically.
+- Marker must be unique to this automation (for example, `kwf:queue-position` in hidden metadata or comment body marker).
+
+Message text (exact template):
+- `There are XX tickets with higher priority that I need to complete (<Nh) before this ticket can be started. If this is urgent, change the priority.`
+
+Semantics:
+- `XX` is the exact count of higher-priority tickets ahead of this ticket in the current queue order.
+- Position must be represented exactly (not bucketed as `10+`).
+- Applies to all queued tickets, regardless of queue depth.
+
+Update behavior:
+- If no dispatcher queue-position comment exists for a queued ticket: create one.
+- If a dispatcher queue-position comment exists and `XX` changed: update the existing comment (do not create a new one).
+- If a dispatcher queue-position comment exists and `XX` is unchanged: no-op.
+- If a ticket is no longer in queue scope: delete the dispatcher queue-position comment.
+
+Operational behavior:
+- Dispatcher is the sole writer of queue-position comments.
+- Never mutate or delete human-authored comments.
+- Queue-comment update failures are non-blocking; log errors and continue workflow-loop execution.
+
+API/adapter requirement:
+- Implement comment create/update/delete support in Plane adapter using supported comment endpoints.
+- Prefer Plane `work-items` comment endpoints (not legacy/deprecated `issues` endpoints) for forward compatibility.
+
+## 12) Queue ETA estimate in dispatcher comments (active, 2026-03-04)
+
+Problem:
+- Users need a rough time estimate, not only queue position.
+
+Requirement:
+- Queue-position comment must include an ETA estimate derived from recent worker completion throughput.
+
+ETA model:
+- Use a rolling average of the last 3 completed tickets.
+- Per-ticket duration for averaging is measured as actual worker runtime:
+  - start: when ticket work begins in `stage:in-progress`
+  - end: when ticket reaches `stage:in-review`
+  - blocked time should not inflate ETA; estimate should represent active worker execution time.
+- If fewer than 3 completed-ticket samples are available, use default average duration of 20 minutes.
+
+ETA formula:
+- For a queued ticket with `XX` higher-priority tickets ahead:
+  - estimate completion horizon as `(XX + 1) * avg_duration`
+  - this represents rough time until that queued ticket is completed (not just started).
+
+Display formatting:
+- Convert estimate to hours and round using ceiling.
+- If estimate is below 1 hour, display `<1h`.
+- Queue comment message template must be:
+  - `There are XX tickets with higher priority that I need to complete (<Nh) before this ticket can be started. If this is urgent, change the priority.`
+- For estimates below one hour, replace `<Nh` with `<1h`.
+
+Operational notes:
+- ETA is advisory and approximate.
+- ETA must be recalculated during each queue-comment reconciliation pass.
 
 Potential future re-expansion topics (not active now):
 - Re-introducing multi-adapter support

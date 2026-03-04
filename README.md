@@ -37,6 +37,10 @@ Per workflow-loop work action:
    - `blocked` -> comment + move to `stage:blocked`
    - `uncertain` -> comment (with clarification questions) + move to `stage:blocked`
    - `completed` -> comment + move to `stage:in-review`
+7. Dispatcher reconciles queue-position comments on all queued `stage:todo` tickets:
+   - create if missing
+   - update same comment only when queue count changes
+   - delete when ticket leaves queue
 
 Session behavior:
 - One worker session per ticket, reused while ticket remains active/open.

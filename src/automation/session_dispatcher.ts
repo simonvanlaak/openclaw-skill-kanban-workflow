@@ -27,6 +27,7 @@ export type SessionEntry = {
   sessionLabel?: string;
   lastState: 'in_progress' | 'blocked' | 'completed' | 'no_work';
   lastSeenAt: string;
+  workStartedAt?: string;
   closedAt?: string;
   continueCount?: number;
 };
@@ -34,6 +35,11 @@ export type SessionEntry = {
 export type SessionMap = {
   version: 1;
   active?: { ticketId: string; sessionId: string };
+  queuePosition?: {
+    commentsByTicket: Record<string, { commentId: string; higherPriorityCount: number; lastSeenAt?: string; templateVersion?: number }>;
+    recentCompletionDurationsMs?: number[];
+    lastReconciledAt?: string;
+  };
   noWork?: {
     streakStartedAt: string;
     lastSeenAt: string;
@@ -130,6 +136,26 @@ export async function loadSessionMap(path = DEFAULT_SESSION_MAP_PATH): Promise<S
           }
         : undefined;
 
+    const queuePosition =
+      parsed.queuePosition && typeof parsed.queuePosition === 'object'
+        ? {
+            commentsByTicket:
+              parsed.queuePosition.commentsByTicket && typeof parsed.queuePosition.commentsByTicket === 'object'
+                ? parsed.queuePosition.commentsByTicket
+                : {},
+            recentCompletionDurationsMs:
+              Array.isArray(parsed.queuePosition.recentCompletionDurationsMs)
+                ? parsed.queuePosition.recentCompletionDurationsMs
+                    .map((v: unknown) => Number(v))
+                    .filter((v: number) => Number.isFinite(v) && v > 0)
+                : [],
+            lastReconciledAt:
+              typeof parsed.queuePosition.lastReconciledAt === 'string'
+                ? parsed.queuePosition.lastReconciledAt
+                : undefined,
+          }
+        : undefined;
+
     return {
       version: 1,
       active:
@@ -137,6 +163,7 @@ export async function loadSessionMap(path = DEFAULT_SESSION_MAP_PATH): Promise<S
           ? { ticketId: parsed.active.ticketId, sessionId: parsed.active.sessionId }
           : undefined,
       noWork,
+      queuePosition,
       rocketChatStatus,
       sessionsByTicket,
     };
@@ -222,6 +249,7 @@ function ensureSessionForTicket(
     : existing?.sessionLabel || makeSessionLabel(effectiveDisplayId, ticketTitle);
 
   if (existing && !existing.closedAt) {
+    const previousState = existing.lastState;
     let sessionId = existing.sessionId;
     const shouldUpgradeLegacyId =
       preferredSessionId !== sessionId &&
@@ -236,6 +264,9 @@ function ensureSessionForTicket(
 
     existing.lastState = 'in_progress';
     existing.lastSeenAt = nowIso;
+    if (previousState !== 'in_progress' || !existing.workStartedAt) {
+      existing.workStartedAt = nowIso;
+    }
     existing.sessionLabel = sessionLabel;
     map.active = { ticketId, sessionId };
     return { sessionId, sessionLabel, reused: !shouldUpgradeLegacyId };
@@ -254,6 +285,7 @@ function ensureSessionForTicket(
     sessionLabel,
     lastState: 'in_progress',
     lastSeenAt: nowIso,
+    workStartedAt: nowIso,
   };
   map.active = { ticketId, sessionId };
   return { sessionId, sessionLabel, reused: false };
@@ -289,6 +321,7 @@ export function applyWorkerCommandToSessionMap(
   if (command.kind === 'continue') {
     entry.lastState = 'in_progress';
     entry.continueCount = (entry.continueCount ?? 0) + 1;
+    if (!entry.workStartedAt) entry.workStartedAt = nowIso;
     delete entry.closedAt;
     map.active = { ticketId, sessionId: entry.sessionId };
     return map;
@@ -299,6 +332,7 @@ export function applyWorkerCommandToSessionMap(
     entry.closedAt = nowIso;
   } else {
     delete entry.closedAt;
+    delete entry.workStartedAt;
   }
   if (map.active?.ticketId === ticketId) {
     map.active = undefined;

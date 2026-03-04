@@ -76,6 +76,7 @@ Removed from user CLI:
 - Retry invalid worker JSON up to 2 times with all schema errors + schema contract in retry prompt.
 - If still invalid on the 3rd total attempt, fallback defaults to `blocked`.
 - Apply decision mutation and post a standardized structured comment.
+- Reconcile dispatcher-owned queue-position comments for all queued backlog tickets (create/update/delete).
 
 ## Session Lifecycle
 
