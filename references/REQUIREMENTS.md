@@ -144,10 +144,6 @@ Worker execution model:
   - retry/fallback enforcement
   - auto-reopen processing
   - no-work detection when applicable
-- Decision-agent sessions use bounded rolling reuse:
-  - maximum 5 tickets per decision-agent session
-  - no time-based rotation limit
-  - auto-rotate early when session context reaches 50% of configured context budget
 
 ### 6.2 Auto-reopen
 
@@ -192,7 +188,7 @@ Action:
 - If worker JSON is invalid/unparseable, workflow-loop performs repair retries according to section 10.4.
 - If retry output is still invalid/unparseable, workflow-loop applies forced fallback decision `blocked`.
 - Worker dispatch metadata must include correlation fields: `ticketId` and `dispatchRunId`.
-- Workflow-loop retry prompt should include missing-items guidance only (no full prior-report echo required).
+- Workflow-loop retry prompt must include all schema errors from the failed payload plus the strict JSON schema contract (field/type/constraint definitions), and should not echo full prior payload content.
 - No separate per-run decision artifact file is required; decision context is retained in workflow-loop session history.
 - On failed retry fallback, workflow-loop immediately applies `blocked` when decision output is missing/invalid/ambiguous.
 - If required decision signals remain missing after retry (decision, completed steps, and decision-specific required fields), workflow-loop must coerce any non-`blocked` decision to `blocked`.

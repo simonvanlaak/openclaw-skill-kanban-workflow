@@ -28,18 +28,19 @@ Plane-only workflow automation with a local `workflow-loop` runner and LLM worke
 
 Per workflow-loop work action:
 
-1. Worker agent runs in the ticket-bound session and produces a markdown report.
-2. Report must include verification evidence, blockers status, uncertainties, and confidence (0.0..1.0).
-3. If report facts are missing, one retry prompt is issued.
-4. Decision agent chooses exactly one: `continue` | `blocked` | `completed`.
-5. If the decision cannot be parsed, default is `blocked`.
-6. Per ticket continue cap is hard-limited to 2; after that only `blocked` or `completed` can be applied.
-7. Dispatcher applies Plane mutation and posts a free-text comment summary.
+1. Worker agent runs in the ticket-bound session and produces a strict JSON result object.
+2. JSON is validated in strict mode (unknown fields rejected, required fields/types enforced, conditional rules per decision).
+3. If JSON is invalid, workflow-loop issues up to 2 retry prompts that include all schema errors plus the strict schema contract.
+4. If still invalid on the 3rd total attempt, workflow-loop forces `blocked`.
+5. Valid decisions are exactly: `blocked` | `completed` | `uncertain`.
+6. Dispatcher converts JSON into a standardized ticket comment and applies Plane mutation:
+   - `blocked` -> comment + move to `stage:blocked`
+   - `uncertain` -> comment (with clarification questions) + move to `stage:blocked`
+   - `completed` -> comment + move to `stage:in-review`
 
 Session behavior:
 - One worker session per ticket, reused while ticket remains active/open.
 - Blocked tickets keep session context for human unblock and resume.
-- Decision-agent session rotates every 5 tickets or when token usage reaches 50%.
 - Blocked ticket sessions are archived after 7 days.
 
 ## Development
