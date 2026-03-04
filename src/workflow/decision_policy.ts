@@ -143,16 +143,21 @@ export function extractDecisionProbabilities(report: string): DecisionProbabilit
 }
 
 function firstSentenceWithSignal(text: string, signal: RegExp): string | undefined {
-  const sentences = text
+  const normalized = text
     .replace(/\r\n?/g, '\n')
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/^#{1,6}\s+/gm, '')
     .replace(/^\s*[-*+]\s+/gm, '')
     .replace(/^\s*\d+\.\s+/gm, '')
     .replace(/\|/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .split(/(?<=[.!?])\s+/)
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/[_~]/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+
+  const sentences = normalized
+    .split(/\n+|(?<=[.!?])\s+/)
     .map((s) => s.trim())
     .filter(Boolean);
 

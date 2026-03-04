@@ -65,17 +65,35 @@ async function resolveRocketChatCredentials(): Promise<{ baseUrl: string; userId
   return { baseUrl: baseUrl.replace(/\/+$/, ''), userId, authToken };
 }
 
-function desiredMessageFromLoop(params: { activeTicketId: string | null; activeTitle?: string; tickKind?: string; reasonCode?: string }): string {
+function extractDisplayIdFromSessionLabel(label: string): string | null {
+  const clean = cleanOneLine(label);
+  if (!clean) return null;
+  const first = clean.split(' ')[0]?.trim();
+  if (!first) return null;
+  return first;
+}
+
+function desiredMessageFromLoop(params: {
+  activeTicketId: string | null;
+  activeTitle?: string;
+  tickKind?: string;
+  reasonCode?: string;
+  sessionLabel?: string;
+}): string {
   if (params.tickKind === 'no_work') {
-    const suffix = params.reasonCode ? ` (reason: ${params.reasonCode})` : '';
-    return `KWF idle${suffix}`;
+    // Make idle status human-friendly, avoid technical reason codes.
+    if (params.reasonCode) {
+      // Common reasons in KWF are internal (e.g. no_backlog_assigned), so translate.
+      return 'done with all tickets, waiting for new assignment';
+    }
+    return 'waiting for new assignment';
   }
 
-  if (!params.activeTicketId) return 'KWF idle';
+  if (!params.activeTicketId) return 'waiting for new assignment';
 
+  const displayId = extractDisplayIdFromSessionLabel(params.sessionLabel ?? '') ?? params.activeTicketId;
   const title = cleanOneLine(params.activeTitle ?? '');
-  const prefix = 'KWF working on';
-  const raw = title ? `${prefix} ${params.activeTicketId}: ${title}` : `${prefix} ${params.activeTicketId}`;
+  const raw = title ? `working on ${displayId}: ${title}` : `working on ${displayId}`;
 
   // Keep it short so Rocket.Chat status UI stays readable.
   return raw.length > 96 ? `${raw.slice(0, 93)}...` : raw;
@@ -124,11 +142,14 @@ export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params: {
       ? params.output.nextTicket.item.title
       : undefined;
 
+  const sessionLabel = activeTicketId ? params.map.sessionsByTicket?.[activeTicketId]?.sessionLabel : undefined;
+
   const desiredMessage = desiredMessageFromLoop({
     activeTicketId,
     activeTitle,
     tickKind,
     reasonCode,
+    sessionLabel,
   });
 
   const prev = (params.previousMap as any)?.rocketChatStatus?.lastMessage;

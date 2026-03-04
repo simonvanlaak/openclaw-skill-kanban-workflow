@@ -268,13 +268,14 @@ export class PlaneAdapter implements Adapter {
     const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
     const url = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
 
+    const commentHtml = this.renderCommentHtml(body);
     const res = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
       },
-      body: JSON.stringify({ comment_html: `<p>${body}</p>` }),
+      body: JSON.stringify({ comment_html: commentHtml }),
     });
 
     if (!res.ok) {
@@ -318,6 +319,34 @@ export class PlaneAdapter implements Adapter {
       .replace(/<[^>]+>/g, '')
       .replace(/&nbsp;/g, ' ')
       .trim();
+  }
+
+  private escapeHtml(input: string): string {
+    return String(input ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  private renderInlineMarkdown(text: string): string {
+    return text
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>');
+  }
+
+  private renderCommentHtml(body: string): string {
+    const normalized = String(body ?? '').replace(/\r\n?/g, '\n').trim();
+    if (!normalized) return '<p></p>';
+
+    const escaped = this.escapeHtml(normalized);
+    const withInline = this.renderInlineMarkdown(escaped);
+    const paragraphs = withInline
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`);
+
+    return paragraphs.length > 0 ? paragraphs.join('') : '<p></p>';
   }
 
   private readonly statesCacheByProject = new Map<string, PlaneState[]>();
