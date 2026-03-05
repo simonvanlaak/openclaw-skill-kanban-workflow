@@ -53,6 +53,29 @@ describe('agent io parsing', () => {
     expect(parsed.workerOutput).toBe('Line A\nLine B');
   });
 
+  it('extracts routing metadata when present in result meta', () => {
+    const stdout = JSON.stringify({
+      status: 'ok',
+      result: {
+        payloads: [{ text: 'Done' }],
+        meta: {
+          systemPromptReport: {
+            sessionKey: 'agent:kanban-workflow-worker:main',
+            sessionId: '9350ec2e-eb42-46a4-b45b-164f869dfa40',
+          },
+          agentMeta: {
+            sessionId: 'ce7e1173-f600-48b4-a5d3-f86c9cfbf3b4',
+          },
+        },
+      },
+    });
+
+    const parsed = parseWorkerOutputFromAgentCall(stdout, '');
+    expect(parsed.routing?.sessionKey).toBe('agent:kanban-workflow-worker:main');
+    expect(parsed.routing?.sessionId).toBe('9350ec2e-eb42-46a4-b45b-164f869dfa40');
+    expect(parsed.routing?.agentSessionId).toBe('ce7e1173-f600-48b4-a5d3-f86c9cfbf3b4');
+  });
+
   it('falls back to raw stdout when output is not JSON', () => {
     const parsed = parseWorkerOutputFromAgentCall('plain markdown report', '');
     expect(parsed.workerOutput).toBe('plain markdown report');

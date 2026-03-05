@@ -118,6 +118,55 @@ function idFromUnknown(raw: unknown): string | undefined {
   return undefined;
 }
 
+function actorKeys(actor: unknown): string[] {
+  if (actor == null) return [];
+
+  const out = new Set<string>();
+  const push = (value: unknown): void => {
+    if (value == null) return;
+    const text = String(value).trim().toLowerCase();
+    if (text.length > 0) out.add(text);
+  };
+
+  if (typeof actor === 'string' || typeof actor === 'number') {
+    push(actor);
+    return [...out];
+  }
+
+  if (typeof actor === 'object') {
+    const obj: any = actor;
+    push(idFromUnknown(obj));
+    push(idFromUnknown(obj.user));
+    push(idFromUnknown(obj.actor));
+
+    push(obj.username);
+    push(obj.email);
+    push(obj.name);
+    push(obj.display_name);
+    push(obj.displayName);
+    push(obj.full_name);
+    push(obj.fullName);
+    push(obj.user?.username);
+    push(obj.user?.email);
+    push(obj.user?.name);
+    push(obj.user?.display_name);
+    push(obj.user?.displayName);
+    push(obj.user?.full_name);
+    push(obj.user?.fullName);
+  }
+
+  return [...out];
+}
+
+function assigneeMatchesSelf(
+  assignee: string | { id?: string; username?: string; name?: string },
+  me: { id?: string; username?: string; name?: string },
+): boolean {
+  const meKeys = new Set(actorKeys(me));
+  if (meKeys.size === 0) return false;
+  return actorKeys(assignee).some((k) => meKeys.has(k));
+}
+
 function extractIssueCreatorId(raw: unknown): string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const issue: any = raw;
@@ -255,7 +304,7 @@ export class PlaneAdapter implements Adapter {
   }
 
   private async getIssueRaw(projectId: string, id: string): Promise<any> {
-    return (await this.runJson(['issues', 'get', '--project', projectId, String(id)])) ?? {};
+    return (await this.runJson(['issues', 'get', '-p', projectId, String(id)])) ?? {};
   }
 
 
@@ -413,8 +462,8 @@ export class PlaneAdapter implements Adapter {
 
   private stripHtml(input: string): string {
     return String(input || '')
-      .replace(/<br\s*\/?\s*>/gi, '\\n')
-      .replace(/<\/p>/gi, '\\n')
+      .replace(/<br\s*\/?\s*>/gi, '\n')
+      .replace(/<\/p>/gi, '\n')
       .replace(/<[^>]+>/g, '')
       .replace(/&nbsp;/g, ' ')
       .trim();
@@ -512,7 +561,7 @@ export class PlaneAdapter implements Adapter {
   private async fetchStatesForProject(projectId: string): Promise<PlaneState[]> {
     const cached = this.statesCacheByProject.get(projectId);
     if (cached) return cached;
-    const raw = (await this.runJson(['states', '--project', projectId])) ?? [];
+    const raw = (await this.runJson(['states', '-p', projectId])) ?? [];
     const statesRaw = Array.isArray(raw)
       ? raw
       : raw && typeof raw === 'object'
@@ -614,7 +663,7 @@ export class PlaneAdapter implements Adapter {
             ...this.formatArgs,
             'issues',
             'assign',
-            '--project',
+            '-p',
             projectId,
             issueId,
             creatorId,
@@ -651,13 +700,7 @@ export class PlaneAdapter implements Adapter {
       if (meId) {
         const hasAnyAssigneeData = backlog.some((i) => (i.assignees ?? []).length > 0);
         if (hasAnyAssigneeData) {
-          backlog = backlog.filter((i) =>
-            (i.assignees ?? []).some((a) => {
-              if (typeof a === 'string') return String(a) === String(meId);
-              const aid = (a as any)?.id;
-              return aid ? String(aid) === String(meId) : false;
-            }),
-          );
+          backlog = backlog.filter((i) => (i.assignees ?? []).some((a) => assigneeMatchesSelf(a, me)));
         }
       }
 
@@ -696,11 +739,9 @@ export class PlaneAdapter implements Adapter {
     const item = snap.get(id);
     if (!item) throw new Error(`Plane work item not found: ${id}`);
 
-    const projectId =
-      this.projectIds.find((pid) => String(pid) === String((item.raw as any)?.project_id)) ??
-      this.projectIdFromIssueRaw(item.raw) ??
-      this.projectIds[0];
-    this.rememberIssueProject(id, projectId);
+    // Determine project id reliably. Some Plane list surfaces omit `project_id`,
+    // so we prefer the adapter's project resolution cache/probing.
+    const projectId = await this.resolveProjectIdForIssue(id, 'getWorkItem');
     let body = extractIssueBody(item.raw);
 
     // Fetch issue details for richer/full description where list payload is truncated.
@@ -781,7 +822,7 @@ export class PlaneAdapter implements Adapter {
       ...this.formatArgs,
       'issues',
       'update',
-      '--project',
+      '-p',
       projectId,
       '--state',
       stateId,
@@ -819,7 +860,7 @@ export class PlaneAdapter implements Adapter {
     const created = (await this.runJson([
       'issues',
       'create',
-      '--project',
+      '-p',
       projectId,
       '--name',
       input.title,
@@ -841,7 +882,7 @@ export class PlaneAdapter implements Adapter {
       ...this.formatArgs,
       'issues',
       'assign',
-      '--project',
+      '-p',
       projectId,
       id,
       me.id,
@@ -879,7 +920,12 @@ export class PlaneAdapter implements Adapter {
         state: StateSchema.optional(),
         state_detail: StateSchema.optional(),
         labels: z
-          .array(z.object({ name: z.string() }).passthrough())
+          .array(
+            z.union([
+              z.string().transform((name) => ({ name })),
+              z.object({ name: z.string() }).passthrough(),
+            ]),
+          )
           .optional()
           .default([])
           .transform((arr) => arr.map((x) => x.name)),
@@ -890,14 +936,58 @@ export class PlaneAdapter implements Adapter {
               z
                 .object({
                   id: z.union([z.string(), z.number()]).optional(),
+                  user_id: z.union([z.string(), z.number()]).optional(),
+                  userId: z.union([z.string(), z.number()]).optional(),
                   name: z.string().optional(),
+                  email: z.string().optional(),
+                  display_name: z.string().optional(),
+                  displayName: z.string().optional(),
+                  full_name: z.string().optional(),
+                  fullName: z.string().optional(),
                   username: z.string().optional(),
+                  user: z
+                    .object({
+                      id: z.union([z.string(), z.number()]).optional(),
+                      user_id: z.union([z.string(), z.number()]).optional(),
+                      userId: z.union([z.string(), z.number()]).optional(),
+                      username: z.string().optional(),
+                      email: z.string().optional(),
+                      name: z.string().optional(),
+                      display_name: z.string().optional(),
+                      displayName: z.string().optional(),
+                      full_name: z.string().optional(),
+                      fullName: z.string().optional(),
+                    })
+                    .passthrough()
+                    .optional(),
                 })
                 .passthrough()
                 .transform((a) => ({
-                  id: a.id != null ? String(a.id) : undefined,
-                  name: a.name,
-                  username: a.username,
+                  id:
+                    idFromUnknown(a.id) ??
+                    idFromUnknown(a.user_id) ??
+                    idFromUnknown(a.userId) ??
+                    idFromUnknown(a.user),
+                  name:
+                    a.name ??
+                    a.full_name ??
+                    a.fullName ??
+                    a.display_name ??
+                    a.displayName ??
+                    a.user?.name ??
+                    a.user?.full_name ??
+                    a.user?.fullName ??
+                    a.user?.display_name ??
+                    a.user?.displayName,
+                  username:
+                    a.username ??
+                    a.email ??
+                    a.display_name ??
+                    a.displayName ??
+                    a.user?.username ??
+                    a.user?.email ??
+                    a.user?.display_name ??
+                    a.user?.displayName,
                 })),
             ]),
           )

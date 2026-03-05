@@ -517,10 +517,41 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         queueState.recentCompletionDurationsMs = [...samples, durationMs].slice(-3);
       };
 
-      const applyWorkerOutput = async (action: { sessionId: string; ticketId: string; projectId?: string }, workerOutput: string, detailPrefix?: string): Promise<void> => {
+      const buildSessionRoutingWarning = (
+        action: { sessionId: string; ticketId: string },
+        routing?: { sessionKey?: string; sessionId?: string; agentSessionId?: string },
+      ): string | null => {
+        const sessionKey = String(routing?.sessionKey ?? '').trim();
+        if (!sessionKey) return null;
+
+        const expectedSuffix = `:${action.sessionId}`;
+        if (sessionKey.endsWith(expectedSuffix)) return null;
+
+        return [
+          'session_routing_mismatch',
+          `ticketId=${action.ticketId}`,
+          `requested_session_id=${action.sessionId}`,
+          `effective_session_key=${sessionKey}`,
+          routing?.sessionId ? `effective_session_id=${routing.sessionId}` : undefined,
+          routing?.agentSessionId ? `agent_session_id=${routing.agentSessionId}` : undefined,
+        ]
+          .filter(Boolean)
+          .join('; ');
+      };
+
+      const applyWorkerOutput = async (
+        action: { sessionId: string; ticketId: string; projectId?: string },
+        workerOutput: string,
+        detailPrefix?: string,
+        routing?: { sessionKey?: string; sessionId?: string; agentSessionId?: string },
+      ): Promise<void> => {
         let payload = workerOutput;
         let validation = validateWorkerResult(payload);
         let retryCount = 0;
+        const routingWarning = buildSessionRoutingWarning(action, routing);
+        if (routingWarning) {
+          console.warn(`[kwf][warn] ${routingWarning}`);
+        }
 
         while (!validation.ok && retryCount < 2) {
           retryCount += 1;
@@ -541,7 +572,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
               parsed: null,
               workerOutput: retry.notice,
               outcome: 'delegated_started',
-              detail: 'source=retry-request; ticket_notified=false',
+              detail: routingWarning
+                ? `source=retry-request; ticket_notified=false; ${routingWarning}`
+                : 'source=retry-request; ticket_notified=false',
             });
             return;
           }
@@ -590,7 +623,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             parsed,
             workerOutput: payload,
             outcome: 'applied',
-            detail: detailPrefix ? `${detailPrefix}; ${detail}` : detail,
+            detail: [detailPrefix, detail, routingWarning].filter(Boolean).join('; '),
           });
         } catch (err: any) {
           execution.push({
@@ -625,7 +658,12 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             }
 
             if (delegationState.kind === 'completed') {
-              await applyWorkerOutput(action, delegationState.workerOutput, 'source=background-delegation');
+              await applyWorkerOutput(
+                action,
+                delegationState.workerOutput,
+                'source=background-delegation',
+                delegationState.routing,
+              );
               continue;
             }
 
@@ -660,7 +698,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
             continue;
           }
 
-          await applyWorkerOutput(action, dispatched.workerOutput);
+          await applyWorkerOutput(action, dispatched.workerOutput, undefined, dispatched.routing);
         }
 
         noWorkAlert = await maybeSendNoWorkFirstHitAlert({

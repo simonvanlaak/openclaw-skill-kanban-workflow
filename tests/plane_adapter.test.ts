@@ -151,7 +151,7 @@ describe('PlaneAdapter', () => {
       'json',
       'issues',
       'assign',
-      '--project',
+      '-p',
       'proj',
       'i1',
       'u1',
@@ -161,7 +161,7 @@ describe('PlaneAdapter', () => {
       'json',
       'issues',
       'assign',
-      '--project',
+      '-p',
       'proj',
       'i3',
       'u3',
@@ -201,7 +201,7 @@ describe('PlaneAdapter', () => {
       'json',
       'issues',
       'assign',
-      '--project',
+      '-p',
       'proj',
       'i9',
       'u9',
@@ -255,7 +255,7 @@ describe('PlaneAdapter', () => {
       'json',
       'issues',
       'assign',
-      '--project',
+      '-p',
       'proj',
       'i10',
       'u10',
@@ -303,7 +303,7 @@ describe('PlaneAdapter', () => {
       'json',
       'issues',
       'assign',
-      '--project',
+      '-p',
       'proj',
       'i20',
       'u20',
@@ -352,6 +352,46 @@ describe('PlaneAdapter', () => {
     expect(ids).toEqual(['i-high', 'i-low']);
   });
 
+  it('keeps multi-assignee backlog tickets when self is one of the assignees', async () => {
+    (execa as any as ExecaMock)
+      // whoami -> me + projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1', email: 'jules@local' }) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // issues list
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i-multi',
+            name: 'Multi assignee',
+            state: { name: 'stage:todo' },
+            assignees: [{ user_id: 'other-user' }, { user_id: 'me1' }],
+            updated_at: '2026-02-27T12:00:00Z',
+          },
+          {
+            id: 'i-not-me',
+            name: 'Not assigned to me',
+            state: { name: 'stage:todo' },
+            assignees: [{ id: 'another-user' }],
+            updated_at: '2026-02-27T10:00:00Z',
+          },
+        ]),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      stageMap: {
+        'stage:todo': 'stage:todo',
+        'stage:blocked': 'stage:blocked',
+        'stage:in-progress': 'stage:in-progress',
+        'stage:in-review': 'stage:in-review',
+      },
+    });
+
+    const ids = await adapter.listBacklogIdsInOrder();
+    expect(ids).toEqual(['i-multi']);
+  });
+
   it('implements setStage via plane issues update --state <id>', async () => {
     (execa as any as ExecaMock)
       // fetchStates()
@@ -375,13 +415,13 @@ describe('PlaneAdapter', () => {
 
     await adapter.setStage('i1', 'stage:in-progress');
 
-    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'states', '--project', 'proj']);
+    expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'states', '-p', 'proj']);
     expect((execa as any).mock.calls[1]?.[1]).toEqual([
       '-f',
       'json',
       'issues',
       'update',
-      '--project',
+      '-p',
       'proj',
       '--state',
       's2',
@@ -422,7 +462,7 @@ describe('PlaneAdapter', () => {
 
     expect(item.body).toBe('Full Plane description from details endpoint');
     expect((execa as any).mock.calls[0]?.[1]).toEqual(['-f', 'json', 'issues', 'list', '-p', 'proj']);
-    expect((execa as any).mock.calls[1]?.[1]).toEqual(['-f', 'json', 'issues', 'get', '--project', 'proj', 'i42']);
+    expect((execa as any).mock.calls[1]?.[1]).toEqual(['-f', 'json', 'issues', 'get', '-p', 'proj', 'i42']);
   });
 
   it('getWorkItem falls back to stripped HTML description when only HTML is available', async () => {

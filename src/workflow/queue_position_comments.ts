@@ -32,13 +32,21 @@ function renderQueueComment(higherPriorityCount: number, averageDurationMs: numb
 }
 
 function normalizeText(text: string | undefined): string {
-  return String(text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return String(text ?? '')
+    .replace(/\\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 function isQueueManagedComment(comment: { body: string; author?: { id?: string; username?: string; name?: string } }): boolean {
   const body = String(comment.body ?? '');
   const hasLegacyMarker = body.includes(LEGACY_QUEUE_MARKER);
-  const hasQueueTemplate = body.startsWith(QUEUE_TEXT_PREFIX) && body.includes(QUEUE_TEXT_MIDDLE) && body.endsWith(QUEUE_TEXT_SUFFIX);
+  const normalized = normalizeText(body);
+  const hasQueueTemplate =
+    normalized.startsWith(normalizeText(QUEUE_TEXT_PREFIX)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_MIDDLE)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_SUFFIX));
   return hasLegacyMarker || hasQueueTemplate;
 }
 

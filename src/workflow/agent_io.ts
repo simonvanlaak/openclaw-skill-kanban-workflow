@@ -4,6 +4,11 @@ export type AgentCallParsed = {
   stderr: string;
   ok: boolean;
   error?: string;
+  routing?: {
+    sessionKey?: string;
+    sessionId?: string;
+    agentSessionId?: string;
+  };
 };
 
 function readText(value: unknown): string {
@@ -35,9 +40,19 @@ export function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: un
   let workerOutput = raw;
   let ok = true;
   let error: string | undefined;
+  let routing: AgentCallParsed['routing'];
 
   try {
     const parsed = JSON.parse(raw);
+    const meta = parsed?.result?.meta ?? parsed?.meta;
+    const systemPromptReport = meta?.systemPromptReport;
+    const agentMeta = meta?.agentMeta;
+    routing = {
+      sessionKey: readText(systemPromptReport?.sessionKey) || undefined,
+      sessionId: readText(systemPromptReport?.sessionId) || undefined,
+      agentSessionId: readText(agentMeta?.sessionId) || undefined,
+    };
+
     const status = typeof parsed?.status === 'string' ? String(parsed.status).toLowerCase() : undefined;
     if (status && status !== 'ok') {
       ok = false;
@@ -60,5 +75,5 @@ export function parseWorkerOutputFromAgentCall(stdoutRaw: unknown, stderrRaw: un
     // fallback to raw stdout
   }
 
-  return { workerOutput: workerOutput.trim(), raw, stderr, ok, error };
+  return { workerOutput: workerOutput.trim(), raw, stderr, ok, error, routing };
 }

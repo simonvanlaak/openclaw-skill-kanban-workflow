@@ -269,4 +269,37 @@ describe('queue_position_comments', () => {
     expect(deleteComment).toHaveBeenCalledWith(ticketId, 'duplicate-old');
     expect(updateComment).not.toHaveBeenCalled();
   });
+
+  it('reuses existing queue comment when body includes escaped newline artifacts', async () => {
+    const addComment = vi.fn(async () => undefined);
+    const updateComment = vi.fn(async () => undefined);
+    const deleteComment = vi.fn(async () => undefined);
+    const map = mapWithQueueState();
+    map.active = { ticketId: 'ACTIVE-1', sessionId: 'active-1' };
+
+    const result = await reconcileQueuePositionComments({
+      adapter: {
+        listBacklogIdsInOrder: async () => ['T-1'],
+        listComments: async () => [
+          {
+            id: 'existing-c1',
+            body: 'There are 1 tickets with higher priority that I need to complete (<1h) before this ticket can be started. If this is urgent, change the priority.\\n',
+          },
+        ],
+        addComment,
+        updateComment,
+        deleteComment,
+      },
+      map,
+      dryRun: false,
+    });
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(0);
+    expect(result.unchanged).toBe(1);
+    expect(addComment).not.toHaveBeenCalled();
+    expect(updateComment).not.toHaveBeenCalled();
+    expect(deleteComment).not.toHaveBeenCalled();
+    expect(map.queuePosition?.commentsByTicket['T-1']?.commentId).toBe('existing-c1');
+  });
 });

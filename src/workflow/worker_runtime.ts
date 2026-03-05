@@ -6,8 +6,15 @@ import { execa } from 'execa';
 
 import { parseWorkerOutputFromAgentCall } from './agent_io.js';
 
+type WorkerRouting = { sessionKey?: string; sessionId?: string; agentSessionId?: string };
+
 export type DispatchWorkerTurnResult =
-  | { kind: 'immediate'; workerOutput: string; raw: string }
+  | {
+      kind: 'immediate';
+      workerOutput: string;
+      raw: string;
+      routing?: WorkerRouting;
+    }
   | { kind: 'delegated'; notice: string };
 
 export type WorkerDelegationMeta = {
@@ -24,7 +31,13 @@ export type WorkerDelegationMeta = {
 export type WorkerDelegationState =
   | { kind: 'none' }
   | { kind: 'running'; meta: WorkerDelegationMeta }
-  | { kind: 'completed'; meta: WorkerDelegationMeta; workerOutput: string; raw: string };
+  | {
+      kind: 'completed';
+      meta: WorkerDelegationMeta;
+      workerOutput: string;
+      raw: string;
+      routing?: WorkerRouting;
+    };
 
 export type WorkerRuntimeOptions = {
   delegationDir: string;
@@ -45,6 +58,10 @@ function timeoutMsToSeconds(timeoutMs: number): number {
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function workerSessionKey(agentId: string, sessionId: string): string {
+  return `agent:${agentId}:${sessionId}`;
 }
 
 function withDispatchMetadataEnvelope(params: {
@@ -110,6 +127,86 @@ function hasTimedOutFallbackMessage(text: string): boolean {
 function isRequestTimeoutErr(err: unknown): boolean {
   const text = collectErrText(err).toLowerCase();
   return text.includes('request timed out') || text.includes('llm request timed out') || text.includes('timeout');
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractTextContent(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  return content
+    .map((entry) => (entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null))
+    .filter((entry): entry is Record<string, unknown> => !!entry)
+    .filter((entry) => String(entry.type ?? '').toLowerCase() === 'text')
+    .map((entry) => String(entry.text ?? '').trim())
+    .filter((text) => text.length > 0);
+}
+
+function extractLatestAssistantTextSince(history: unknown, sinceTimestamp: number): { text: string; timestamp: number; sessionId?: string } | null {
+  if (!history || typeof history !== 'object') return null;
+  const payload = history as Record<string, unknown>;
+  const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined;
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+
+  let latest: { text: string; timestamp: number; sessionId?: string } | null = null;
+  for (const message of messages) {
+    if (!message || typeof message !== 'object') continue;
+    const row = message as Record<string, unknown>;
+    if (String(row.role ?? '').toLowerCase() !== 'assistant') continue;
+    const timestamp = Number(row.timestamp);
+    if (!Number.isFinite(timestamp) || timestamp <= sinceTimestamp) continue;
+    const text = extractTextContent(row.content).join('\n').trim();
+    if (!text) continue;
+    if (!latest || timestamp > latest.timestamp) {
+      latest = { text, timestamp, sessionId };
+    }
+  }
+  return latest;
+}
+
+async function gatewayCall(method: string, params: Record<string, unknown>, timeoutMs = 15_000): Promise<unknown> {
+  const args = [
+    'gateway',
+    'call',
+    method,
+    '--params',
+    JSON.stringify(params),
+    '--timeout',
+    String(timeoutMs),
+    '--json',
+  ];
+  const run = await execa('openclaw', args);
+  const raw = String(run.stdout ?? '').trim();
+  if (!raw) return null;
+  return JSON.parse(raw);
+}
+
+async function pollWorkerReply(params: {
+  sessionKey: string;
+  sinceTimestamp: number;
+  timeoutMs: number;
+}): Promise<{ workerOutput: string; raw: string; routing: WorkerRouting } | null> {
+  const deadline = Date.now() + params.timeoutMs;
+  while (Date.now() < deadline) {
+    const history = await gatewayCall('chat.history', {
+      sessionKey: params.sessionKey,
+      limit: 20,
+    });
+    const latest = extractLatestAssistantTextSince(history, params.sinceTimestamp);
+    if (latest) {
+      return {
+        workerOutput: latest.text,
+        raw: latest.text,
+        routing: {
+          sessionKey: params.sessionKey,
+          sessionId: latest.sessionId,
+        },
+      };
+    }
+    await sleep(1200);
+  }
+  return null;
 }
 
 function buildDelegationNotice(params: {
@@ -247,6 +344,7 @@ export async function loadWorkerDelegationState(
     meta,
     workerOutput: parsed.workerOutput,
     raw: parsed.raw,
+    routing: parsed.routing,
   };
 }
 
@@ -294,29 +392,23 @@ export async function dispatchWorkerTurn(
 
   const syncTimeoutMs = resolvePositiveInt(process.env.KWF_WORKER_SYNC_TIMEOUT_MS, opts.defaultSyncTimeoutMs);
   const allowBackgroundDelegation = opts.isBackgroundDelegationAllowed(params.agentId);
-  const timeoutSeconds = timeoutMsToSeconds(syncTimeoutMs);
+  const sessionKey = workerSessionKey(params.agentId, params.sessionId);
+  const dispatchStartTs = Date.now();
 
   try {
-    const run = await execa('openclaw', [
-      'agent',
-      '--agent',
-      params.agentId,
-      '--session-id',
-      params.sessionId,
-      '--thinking',
-      params.thinking,
-      '--timeout',
-      String(timeoutSeconds),
-      '--message',
+    await gatewayCall('chat.send', {
+      sessionKey,
       message,
-      '--json',
-    ]);
+      idempotencyKey: randomUUID(),
+    }, Math.max(syncTimeoutMs, 15_000));
 
-    const parsed = parseWorkerOutputFromAgentCall(run.stdout, run.stderr);
-    if (!parsed.ok) {
-      throw new Error(`Worker turn failed for ticket ${params.ticketId}: ${parsed.error ?? 'unknown error'}`);
-    }
-    if (hasTimedOutFallbackMessage(parsed.workerOutput) || hasTimedOutFallbackMessage(parsed.raw)) {
+    const reply = await pollWorkerReply({
+      sessionKey,
+      sinceTimestamp: dispatchStartTs,
+      timeoutMs: syncTimeoutMs,
+    });
+
+    if (!reply) {
       if (!allowBackgroundDelegation) {
         throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
       }
@@ -345,7 +437,35 @@ export async function dispatchWorkerTurn(
       };
     }
 
-    return { kind: 'immediate', workerOutput: parsed.workerOutput, raw: parsed.raw };
+    if (hasTimedOutFallbackMessage(reply.workerOutput) || hasTimedOutFallbackMessage(reply.raw)) {
+      if (!allowBackgroundDelegation) {
+        throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
+      }
+      await startWorkerDelegation(
+        {
+          ticketId: params.ticketId,
+          projectId: params.projectId,
+          dispatchRunId: params.dispatchRunId,
+          agentId: params.agentId,
+          sessionId: params.sessionId,
+          text: params.text,
+          thinking: params.thinking,
+          syncTimeoutMs,
+        },
+        opts,
+      );
+      return {
+        kind: 'delegated',
+        notice: buildDelegationNotice({
+          ticketId: params.ticketId,
+          text: params.text,
+          syncTimeoutMs,
+          sessionId: params.sessionId,
+        }),
+      };
+    }
+
+    return { kind: 'immediate', workerOutput: reply.workerOutput, raw: reply.raw, routing: reply.routing };
   } catch (err) {
     if (!isRequestTimeoutErr(err)) throw err;
 
