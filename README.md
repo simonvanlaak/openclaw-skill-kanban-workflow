@@ -21,6 +21,7 @@ Plane-only workflow automation with a local `workflow-loop` runner and LLM worke
 - Setup requires Plane and enforces `--plane-scope all-projects`.
 - Backlog selection is global across configured Plane projects, ordered by priority and then title.
 - Only tickets assigned to `whoami` are eligible for active work.
+- Some Plane projects use a separate **Backlog** state in addition to **Todo**. If so, map `Backlog` to `stage:todo` in the stageMap so those tickets are treated as actionable.
 - `workflow-loop` is local CLI/script orchestration; it is not a continuously running agent.
 - If the currently active ticket is unchanged, `workflow-loop` exits quietly (poll-only behavior).
 
