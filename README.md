@@ -24,6 +24,11 @@ Plane-only workflow automation with a local `workflow-loop` runner and LLM worke
 - `workflow-loop` is local CLI/script orchestration; it is not a continuously running agent.
 - If the currently active ticket is unchanged, `workflow-loop` exits quietly (poll-only behavior).
 
+No-work DM alerts:
+- The workflow can optionally send a one-time DM alert when it first detects there is no actionable ticket.
+- This is **disabled by default** (to avoid spam).
+- To enable: set `KWF_NO_WORK_ALERT_ENABLED=1`.
+
 ## Worker + Decision Flow
 
 Per workflow-loop work action:

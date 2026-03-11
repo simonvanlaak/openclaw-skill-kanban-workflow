@@ -43,6 +43,32 @@ If project/state/member IDs are missing, fetch them first (`plane projects list`
 - Use the dedicated `jules` Nextcloud account (never `admin` for routine operations).
 - Local files are temporary working copies only. Final output must be synced to Nextcloud and referenced in updates.
 
+## 3.1) Attach deliverable files to the Plane issue (mandatory)
+
+If you generate a file as part of delivering a ticket outcome (PDF/PNG/CSV/log export/MD/HTML/etc), you must also attach it to the corresponding Plane work item.
+
+Default path:
+- First upload the file to Nextcloud (source of truth) as usual.
+- Then attach the same local file to Plane using:
+
+```bash
+source /root/.openclaw/workspace/scripts/plane_env.sh
+/root/.openclaw/workspace/scripts/plane_attach_file.sh <PROJECT_ID> <ISSUE_ID> <LOCAL_FILE>
+```
+
+Preview UX note (team preference):
+- Plane attachments for .md/.txt require a download and do not preview inline.
+- For markdown deliverables, always upload to Nextcloud and include an **internal Nextcloud link** in the final completion comment.
+- Do not use public links by default. Ensure the whole 4ok team has access (lukas, simon, jesper, olivia).
+- Use the worker JSON optional `links` field (rendered into the Plane completion comment) for these URLs.
+
+Helper (share with team + print internal link):
+```bash
+/root/.openclaw/workspace/scripts/nextcloud_share_internal_team_link.sh "/Jules-Research/<file>.md"
+```
+
+If a file is too large or Plane upload fails, add a Plane comment with a stable Nextcloud public link and the reason (size limit, upload error, etc.).
+
 ## 4) Secrets + infrastructure rules
 
 - Credentials are stored in 1Password (`op://...`), not in repo files.

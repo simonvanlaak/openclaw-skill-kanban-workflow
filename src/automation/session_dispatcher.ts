@@ -438,6 +438,12 @@ function asIso(value: unknown): string | undefined {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }
 
+function trimForPrompt(text: string, maxChars: number): string {
+  const t = String(text ?? '');
+  if (t.length <= maxChars) return t;
+  return `${t.slice(0, Math.max(0, maxChars - 40))}\n\n[TRUNCATED: ${t.length} chars total]`;
+}
+
 function extractTicketContext(payload: any, fallbackTicketId: string): TicketContext {
   const item = payload?.item ?? {};
   const commentsRaw: any[] = Array.isArray(payload?.comments) ? payload.comments : [];
@@ -451,12 +457,12 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
   const comments = commentsRaw.map((c) => {
     const author = normalizeCommentAuthor(c?.author);
     return {
-    at: asIso(c?.createdAt),
-    author: author?.name ?? author?.id,
-    authorId: author?.id,
-    authorName: author?.name,
-    body: c?.body ? String(c.body) : undefined,
-    internal: typeof c?.internal === 'boolean' ? c.internal : undefined,
+      at: asIso(c?.createdAt),
+      author: author?.name ?? author?.id,
+      authorId: author?.id,
+      authorName: author?.name,
+      body: c?.body ? trimForPrompt(String(c.body), 1600) : undefined,
+      internal: typeof c?.internal === 'boolean' ? c.internal : undefined,
     };
   });
 
@@ -487,7 +493,7 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
     id: String(item?.id ?? fallbackTicketId),
     projectId: item?.projectId ? String(item.projectId) : item?.project_id ? String(item.project_id) : undefined,
     title: item?.title ? String(item.title) : undefined,
-    body: item?.body ? String(item.body) : undefined,
+    body: item?.body ? trimForPrompt(String(item.body), 5000) : undefined,
     url: item?.url ? String(item.url) : undefined,
     comments,
     attachments: attachmentsRaw.map((a) => ({
@@ -547,7 +553,7 @@ function compactContextForPrompt(context: TicketContext): Record<string, unknown
   };
   if (context.projectId) compact.projectId = context.projectId;
   if (context.title) compact.title = context.title;
-  if (context.body) compact.body = context.body;
+  if (context.body) compact.body = trimForPrompt(context.body, 5000);
   if (context.url) compact.url = context.url;
   if (context.comments.length > 0) compact.comments = context.comments.slice(0, 10);
   if (context.attachments.length > 0) compact.attachments = context.attachments;

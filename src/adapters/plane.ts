@@ -478,6 +478,9 @@ export class PlaneAdapter implements Adapter {
 
   private renderInlineMarkdown(text: string): string {
     return text
+      // Markdown links: [label](https://example.com)
+      // We only support http/https and we apply this after HTML-escaping, so label/url are safe.
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
       .replace(/`([^`]+)`/g, '<code>$1</code>');
   }

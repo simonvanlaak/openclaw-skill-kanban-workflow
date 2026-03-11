@@ -17,6 +17,10 @@ source /root/.openclaw/workspace/scripts/plane_env.sh
 : "${KWF_CODEX_5H_USAGE_BLOCK_PERCENT:=99}"
 : "${KWF_WORKER_BACKGROUND_DELEGATION:=false}"
 
+# Disable noisy "no actionable ticket" alerts by default.
+# If you ever want them back, set KWF_NO_WORK_ALERT_TARGET to a Rocket.Chat username (e.g. "@simon.vanlaak").
+: "${KWF_NO_WORK_ALERT_TARGET:=}"
+
 {
   echo "[$(date -u +%FT%TZ)] START workflow-loop-cron.sh"
 

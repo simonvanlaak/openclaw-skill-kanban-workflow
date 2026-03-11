@@ -14,6 +14,12 @@ export type NoWorkAlertResult = {
 export const DEFAULT_NO_WORK_ALERT_CHANNEL = 'rocketchat';
 export const DEFAULT_NO_WORK_ALERT_TARGET = '@simon.vanlaak';
 
+function envFlagEnabled(name: string, defaultValue: boolean): boolean {
+  const raw = (process.env[name] ?? '').trim();
+  if (!raw) return defaultValue;
+  return !['0', 'false', 'no', 'off'].includes(raw.toLowerCase());
+}
+
 function noWorkTickFromOutput(output: any): { kind?: string; reasonCode?: string } {
   const tick = output?.tick ?? output;
   if (!tick || typeof tick !== 'object') return {};
@@ -36,6 +42,10 @@ export async function maybeSendNoWorkFirstHitAlert(params: {
   channel?: string;
   target?: string;
 }): Promise<NoWorkAlertResult | null> {
+  // Disabled by default to avoid DM spam. Enable explicitly if desired.
+  const enabled = envFlagEnabled('KWF_NO_WORK_ALERT_ENABLED', false);
+  if (!enabled) return { outcome: 'first_hit_skipped', detail: 'disabled_by_default' };
+
   const tick = noWorkTickFromOutput(params.output);
   if (tick.kind !== 'no_work') return null;
 

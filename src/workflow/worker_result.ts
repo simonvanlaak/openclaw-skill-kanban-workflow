@@ -6,6 +6,17 @@ const MAX_ITEMS_PER_ARRAY = 5;
 const nonEmptyText = z.string().trim().min(MIN_TEXT_LENGTH, `must be at least ${MIN_TEXT_LENGTH} characters long`);
 const boundedTextArray = z.array(nonEmptyText).max(MAX_ITEMS_PER_ARRAY, `must contain at most ${MAX_ITEMS_PER_ARRAY} items`);
 
+const MIN_LINK_TITLE_LENGTH = 3;
+
+const linkItem = z
+  .object({
+    title: z.string().trim().min(MIN_LINK_TITLE_LENGTH, `must be at least ${MIN_LINK_TITLE_LENGTH} characters long`),
+    url: z.string().trim().url('must be a valid URL').refine((u) => /^https?:\/\//i.test(u), 'must start with http:// or https://'),
+  })
+  .strict();
+
+const linksArray = z.array(linkItem).max(MAX_ITEMS_PER_ARRAY, `must contain at most ${MAX_ITEMS_PER_ARRAY} items`);
+
 export const WORKER_RESULT_JSON_SCHEMA_CONTRACT = [
   'WORKER_RESULT_JSON_SCHEMA_CONTRACT',
   '- Output must be a single JSON object (no markdown, no code fences).',
@@ -17,6 +28,8 @@ export const WORKER_RESULT_JSON_SCHEMA_CONTRACT = [
   `  - blocker_resolve_requests: string[] (max ${MAX_ITEMS_PER_ARRAY}; each item min ${MIN_TEXT_LENGTH} chars)`,
   '  - solution_summary: string (min 20 chars) when decision="completed"; disallowed otherwise',
   `  - evidence: string[] (max ${MAX_ITEMS_PER_ARRAY}; each item min ${MIN_TEXT_LENGTH} chars)`,
+  '- Optional fields:',
+  `  - links: { title: string (min ${MIN_LINK_TITLE_LENGTH}), url: string (http/https) }[] (max ${MAX_ITEMS_PER_ARRAY})`,
   '- Decision rules:',
   '  - blocked: blocker_resolve_requests must have at least 1 item; clarification_questions/evidence must be empty; solution_summary disallowed',
   '  - uncertain: clarification_questions must have at least 1 item; blocker_resolve_requests/evidence must be empty; solution_summary disallowed',
@@ -31,6 +44,7 @@ const WorkerResultSchema = z
     blocker_resolve_requests: boundedTextArray,
     solution_summary: nonEmptyText.optional(),
     evidence: boundedTextArray,
+    links: linksArray.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
@@ -131,6 +145,19 @@ const WorkerResultSchema = z
 export type WorkerResultDecision = z.infer<typeof WorkerResultSchema>['decision'];
 export type WorkerResult = z.infer<typeof WorkerResultSchema>;
 
+function formatLinks(links: WorkerResult['links']): string {
+  const items = links ?? [];
+  if (items.length === 0) return '1. (none)';
+  return items
+    .map((l, idx) => {
+      const title = String(l.title ?? '').trim() || `Link ${idx + 1}`;
+      const url = String(l.url ?? '').trim();
+      return `${idx + 1}. [${title}](${url})`;
+    })
+    .join('\n');
+}
+
+
 export type WorkerResultValidation =
   | { ok: true; value: WorkerResult }
   | { ok: false; errors: string[] };
@@ -192,6 +219,10 @@ export function formatWorkerResultComment(result: WorkerResult): string {
     'Completed steps:',
     numberedList(result.completed_steps),
   ];
+
+  if (result.links && result.links.length > 0) {
+    sections.push('', 'Links:', formatLinks(result.links));
+  }
 
   if (result.decision === 'completed') {
     sections.push('', 'Solution summary:', result.solution_summary ?? '', '', 'Evidence:', numberedList(result.evidence));
