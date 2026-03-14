@@ -41,7 +41,9 @@ describe('queue_position_comments', () => {
     expect(addComment).toHaveBeenCalledTimes(2);
     expect(addComment.mock.calls[0]?.[1]).not.toContain('[kwf:queue-position]');
     expect(addComment.mock.calls[0]?.[1]).toContain('There are 1 tickets with higher priority that I need to complete (<1h)');
+    expect(addComment.mock.calls[0]?.[1]).toContain('No explicit handoff is needed');
     expect(addComment.mock.calls[1]?.[1]).toContain('There are 2 tickets with higher priority that I need to complete (<1h)');
+    expect(addComment.mock.calls[1]?.[1]).toContain('No explicit handoff is needed');
     expect(map.queuePosition?.commentsByTicket['T-1']?.commentId).toBe('T-1-c1');
     expect(map.queuePosition?.commentsByTicket['T-2']?.commentId).toBe('T-2-c1');
   });
@@ -131,7 +133,7 @@ describe('queue_position_comments', () => {
       't1-c',
       expect.not.stringContaining('[kwf:queue-position]'),
     );
-    expect(map.queuePosition?.commentsByTicket.T1?.templateVersion).toBe(2);
+    expect(map.queuePosition?.commentsByTicket.T1?.templateVersion).toBe(3);
   });
 
   it('uses rolling average of last 3 completion durations for ETA', async () => {
@@ -193,9 +195,9 @@ describe('queue_position_comments', () => {
     });
 
     expect(result.created).toBe(0);
-    expect(result.updated).toBe(0);
+    expect(result.updated).toBe(1);
     expect(result.deleted).toBe(1);
-    expect(updateComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledTimes(1);
     expect(deleteComment).toHaveBeenCalledWith(ticketId, 'older');
     expect(map.queuePosition?.commentsByTicket[ticketId]?.commentId).toBe('newest');
   });
@@ -264,10 +266,10 @@ describe('queue_position_comments', () => {
     });
 
     expect(result.deleted).toBe(1);
-    expect(result.updated).toBe(0);
-    expect(result.unchanged).toBe(1);
+    expect(result.updated).toBe(1);
+    expect(result.unchanged).toBe(0);
     expect(deleteComment).toHaveBeenCalledWith(ticketId, 'duplicate-old');
-    expect(updateComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledTimes(1);
   });
 
   it('reuses existing queue comment when body includes escaped newline artifacts', async () => {
@@ -295,10 +297,10 @@ describe('queue_position_comments', () => {
     });
 
     expect(result.created).toBe(0);
-    expect(result.updated).toBe(0);
-    expect(result.unchanged).toBe(1);
+    expect(result.updated).toBe(1);
+    expect(result.unchanged).toBe(0);
     expect(addComment).not.toHaveBeenCalled();
-    expect(updateComment).not.toHaveBeenCalled();
+    expect(updateComment).toHaveBeenCalledTimes(1);
     expect(deleteComment).not.toHaveBeenCalled();
     expect(map.queuePosition?.commentsByTicket['T-1']?.commentId).toBe('existing-c1');
   });

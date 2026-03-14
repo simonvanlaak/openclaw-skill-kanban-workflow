@@ -64,13 +64,18 @@ describe('PlaneAdapter (multi-project)', () => {
     expect(ids).toEqual(['A1', 'B1']);
   });
 
-  it('listIdsByStage reads from all configured projects', async () => {
+  it('listIdsByStage reads from all configured projects (assignee-only gating)', async () => {
     (execa as any as ExecaMock)
+      // whoami -> me + projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // project A issues list (assignee-filtered)
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
           { id: 'A1', name: 'A1', state: { name: 'Blocked' }, updated_at: '2026-02-26T00:00:00Z' },
         ]),
       })
+      // project B issues list (assignee-filtered)
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
           { id: 'B1', name: 'B1', state: { name: 'Blocked' }, updated_at: '2026-02-26T00:00:01Z' },
@@ -90,11 +95,11 @@ describe('PlaneAdapter (multi-project)', () => {
 
     const ids = await adapter.listIdsByStage('stage:blocked');
 
-    expect(execa).toHaveBeenNthCalledWith(1, 'plane', ['-f', 'json', 'issues', 'list', '-p', 'projA'], {
+    expect(execa).toHaveBeenNthCalledWith(3, 'plane', ['issues', 'list', '-p', 'projA', '--assignee', 'me1', '-f', 'json'], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
-    expect(execa).toHaveBeenNthCalledWith(2, 'plane', ['-f', 'json', 'issues', 'list', '-p', 'projB'], {
+    expect(execa).toHaveBeenNthCalledWith(4, 'plane', ['issues', 'list', '-p', 'projB', '--assignee', 'me1', '-f', 'json'], {
       stdout: 'pipe',
       stderr: 'pipe',
     });

@@ -8,7 +8,7 @@ export async function show(adapter: VerbAdapter, id: string): Promise<ShowPayloa
   const [linked, comments, attachments] = await Promise.all([
     adapter.listLinkedWorkItems(id),
     adapter.listComments(id, {
-      limit: 10,
+      // Fetch all available comments so workers get full context.
       newestFirst: true,
       includeInternal: true,
     }),

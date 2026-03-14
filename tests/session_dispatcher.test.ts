@@ -103,7 +103,7 @@ describe('session workflow-loop', () => {
     expect(second.actions[0]?.text).toContain('Session label: A1 New title after grooming');
   });
 
-  it('uses ticket id for worker session id + label even when linked issue key exists', () => {
+  it('uses linked issue key for worker session id + label when available', () => {
     const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T14:10:00.000Z'),
@@ -120,12 +120,12 @@ describe('session workflow-loop', () => {
       },
     });
 
-    expect(plan.actions[0]?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(plan.actions[0]?.sessionLabel).toBe('45a8585d-9075-44de-bcd2-196e6793979a Improve kwf worker session naming');
-    expect(plan.actions[0]?.text).toContain('Session label: 45a8585d-9075-44de-bcd2-196e6793979a Improve kwf worker session naming');
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.actions[0]?.sessionLabel).toBe('JULES-177 Improve kwf worker session naming');
+    expect(plan.actions[0]?.text).toContain('Session label: JULES-177 Improve kwf worker session naming');
   });
 
-  it('ignores top-level issue keys for session id and keeps ticket id', () => {
+  it('uses top-level links issue keys for session id and label', () => {
     const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
       now: new Date('2026-02-28T14:11:00.000Z'),
@@ -142,11 +142,11 @@ describe('session workflow-loop', () => {
       },
     });
 
-    expect(plan.actions[0]?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(plan.actions[0]?.sessionLabel).toBe('45a8585d-9075-44de-bcd2-196e6793979a Improve kwf worker session naming');
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.actions[0]?.sessionLabel).toBe('JULES-177 Improve kwf worker session naming');
   });
 
-  it('upgrades legacy worker session ids to per-ticket ids', () => {
+  it('upgrades legacy worker session ids to per-ticket issue-key ids when available', () => {
     const plan = buildWorkflowLoopPlan({
       previousMap: {
         version: 1 as const,
@@ -176,12 +176,12 @@ describe('session workflow-loop', () => {
       },
     });
 
-    expect(plan.actions[0]?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(plan.map.active?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(plan.map.sessionsByTicket['45a8585d-9075-44de-bcd2-196e6793979a']?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
+    expect(plan.actions[0]?.sessionId).toBe('jules-177');
+    expect(plan.map.active?.sessionId).toBe('jules-177');
+    expect(plan.map.sessionsByTicket['45a8585d-9075-44de-bcd2-196e6793979a']?.sessionId).toBe('jules-177');
   });
 
-  it('treats main/default sessions as legacy and upgrades to per-ticket key sessions', () => {
+  it('treats main/default sessions as legacy and upgrades to per-ticket issue-key sessions when available', () => {
     const fromMain = buildWorkflowLoopPlan({
       previousMap: {
         version: 1 as const,
@@ -211,8 +211,8 @@ describe('session workflow-loop', () => {
       },
     });
 
-    expect(fromMain.actions[0]?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(fromMain.map.active?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
+    expect(fromMain.actions[0]?.sessionId).toBe('jules-177');
+    expect(fromMain.map.active?.sessionId).toBe('jules-177');
 
     const fromDefault = buildWorkflowLoopPlan({
       previousMap: {
@@ -243,8 +243,8 @@ describe('session workflow-loop', () => {
       },
     });
 
-    expect(fromDefault.actions[0]?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
-    expect(fromDefault.map.active?.sessionId).toBe('45a8585d-9075-44de-bcd2-196e6793979a');
+    expect(fromDefault.actions[0]?.sessionId).toBe('jules-177');
+    expect(fromDefault.map.active?.sessionId).toBe('jules-177');
   });
 
   it('upgrades legacy main session ids for opaque ticket ids without issue key', () => {

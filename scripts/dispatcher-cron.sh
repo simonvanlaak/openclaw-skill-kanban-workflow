@@ -82,7 +82,20 @@ PY
     fi
   fi
 
+  : "${KWF_WORKFLOW_LOOP_TIMEOUT_SEC:=1800}" # 30 min safety net for cron runs
+
   cd "$SKILL_DIR"
-  npm run -s kanban-workflow -- workflow-loop
+  echo "[workflow-loop-cron] running workflow-loop (timeout=${KWF_WORKFLOW_LOOP_TIMEOUT_SEC}s)"
+  timeout "${KWF_WORKFLOW_LOOP_TIMEOUT_SEC}s" npm run -s kanban-workflow -- workflow-loop || {
+    rc=$?
+    if [ "$rc" -eq 124 ]; then
+      echo "[workflow-loop-cron] workflow-loop timed out after ${KWF_WORKFLOW_LOOP_TIMEOUT_SEC}s"
+    else
+      echo "[workflow-loop-cron] workflow-loop failed (rc=$rc)"
+    fi
+    echo "[$(date -u +%FT%TZ)] END workflow-loop-cron.sh (failed)"
+    exit 1
+  }
+
   echo "[$(date -u +%FT%TZ)] END workflow-loop-cron.sh"
 } >> "$LOG_FILE" 2>&1

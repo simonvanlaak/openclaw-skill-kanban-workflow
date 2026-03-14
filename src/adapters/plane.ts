@@ -1,5 +1,6 @@
 import type { Adapter } from '../adapter.js';
 import type { WorkItem } from '../models.js';
+import type { ExternalLinkInput } from '../core/ports.js';
 
 import { z } from 'zod';
 
@@ -258,6 +259,8 @@ export class PlaneAdapter implements Adapter {
    */
   private readonly formatArgs: readonly string[];
   private readonly issueProjectCache = new Map<string, string>();
+  private readonly projectIdentifierCache = new Map<string, string>();
+  private membersByDisplayNameCache?: Map<string, string>;
 
   constructor(opts: {
     workspaceSlug: string;
@@ -307,6 +310,29 @@ export class PlaneAdapter implements Adapter {
     return (await this.runJson(['issues', 'get', '-p', projectId, String(id)])) ?? {};
   }
 
+  private async getProjectIdentifier(projectId: string): Promise<string | undefined> {
+    const cached = this.projectIdentifierCache.get(projectId);
+    if (cached) return cached;
+
+    try {
+      const payload = await this.runJson(['projects', 'list']);
+      const results = Array.isArray((payload as any)?.results)
+        ? (payload as any).results
+        : Array.isArray(payload)
+          ? payload
+          : [];
+      const match = results.find((p: any) => String(p?.id ?? '') === projectId);
+      const identifier = match?.identifier != null ? String(match.identifier).trim() : '';
+      if (identifier) {
+        this.projectIdentifierCache.set(projectId, identifier);
+        return identifier;
+      }
+    } catch {
+      // best-effort: session naming falls back to UUIDs if the project identifier can't be resolved.
+    }
+
+    return undefined;
+  }
 
   private async postCommentViaApi(projectId: string, id: string, body: string): Promise<void> {
     const apiKey = process.env.PLANE_API_KEY;
@@ -318,14 +344,16 @@ export class PlaneAdapter implements Adapter {
     const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
     const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
 
-    const commentHtml = this.renderCommentHtml(body);
+    const commentHtml = await this.renderCommentHtmlWithMentions(body);
+    const commentJson = await this.renderCommentJsonWithMentions(body);
+
     let res = await fetch(workItemUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
       },
-      body: JSON.stringify({ comment_html: commentHtml }),
+      body: JSON.stringify({ comment_html: commentHtml, comment_json: commentJson }),
     });
 
     // Back-compat fallback for older Plane deployments.
@@ -336,7 +364,7 @@ export class PlaneAdapter implements Adapter {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
         },
-        body: JSON.stringify({ comment_html: commentHtml }),
+        body: JSON.stringify({ comment_html: commentHtml, comment_json: commentJson }),
       });
     }
 
@@ -354,8 +382,78 @@ export class PlaneAdapter implements Adapter {
     }
 
     const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
-    const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
-    const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+    const workItemBaseUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
+    const issueBaseUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
+
+    const fetchPage = async (url: string): Promise<{ results: any[]; next?: string | null }> => {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'x-api-key': apiKey,
+        },
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`Plane comments API failed: HTTP ${res.status} ${txt}`);
+      }
+
+      const json = await res.json().catch(() => ({}));
+      if (Array.isArray(json)) return { results: json, next: null };
+
+      if (json && typeof json === 'object') {
+        const obj: any = json;
+        const results = Array.isArray(obj.results) ? obj.results : [];
+        const next = typeof obj.next === 'string' ? obj.next : null;
+        return { results, next };
+      }
+
+      return { results: [], next: null };
+    };
+
+    const fetchAll = async (baseUrl: string): Promise<any[]> => {
+      const out: any[] = [];
+      let nextUrl: string | null = baseUrl;
+      let pageCount = 0;
+
+      while (nextUrl && pageCount < 50) {
+        pageCount += 1;
+        const { results, next } = await fetchPage(nextUrl);
+        out.push(...results);
+        if (!next) break;
+        try {
+          nextUrl = new URL(next, baseUrl).toString();
+        } catch {
+          // If Plane ever returns a malformed next link, stop paginating.
+          break;
+        }
+      }
+
+      return out;
+    };
+
+    // Try work-items endpoint first.
+    try {
+      return await fetchAll(workItemBaseUrl);
+    } catch (err: any) {
+      const msg = String(err?.message ?? err ?? '');
+      // Back-compat fallback for older Plane deployments.
+      if (msg.includes('HTTP 404') || msg.includes('HTTP 405')) {
+        return await fetchAll(issueBaseUrl);
+      }
+      throw err;
+    }
+  }
+
+  private async listLinksViaApi(projectId: string, id: string): Promise<any[]> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane links API');
+    }
+
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/links/`;
+    const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/links/`;
 
     let res = await fetch(workItemUrl, {
       method: 'GET',
@@ -364,7 +462,6 @@ export class PlaneAdapter implements Adapter {
       },
     });
 
-    // Back-compat fallback for older Plane deployments.
     if (!res.ok && (res.status === 404 || res.status === 405)) {
       res = await fetch(issueUrl, {
         method: 'GET',
@@ -376,13 +473,53 @@ export class PlaneAdapter implements Adapter {
 
     if (!res.ok) {
       const txt = await res.text().catch(() => '');
-      throw new Error(`Plane comments API failed: HTTP ${res.status} ${txt}`);
+      throw new Error(`Plane links API failed (list): HTTP ${res.status} ${txt}`);
     }
 
-    const json = await res.json().catch(() => ({}));
+    const json = await res.json().catch(() => ([]));
     if (Array.isArray(json)) return json;
     if (json && typeof json === 'object' && Array.isArray((json as any).results)) return (json as any).results;
     return [];
+  }
+
+  private async createLinkViaApi(projectId: string, id: string, link: { title?: string; url: string }): Promise<void> {
+    const apiKey = process.env.PLANE_API_KEY;
+    if (!apiKey) {
+      throw new Error('PLANE_API_KEY is required for Plane links API');
+    }
+
+    const base = (process.env.PLANE_BASE_URL || 'https://api.plane.so').replace(/\/$/, '');
+    const workItemUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/links/`;
+    const issueUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/links/`;
+
+    const payload: any = { url: String(link.url || '').trim() };
+    const title = String(link.title ?? '').trim();
+    if (title) payload.title = title;
+
+    let res = await fetch(workItemUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (!res.ok && (res.status === 404 || res.status === 405)) {
+      res = await fetch(issueUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`Plane links API failed (create): HTTP ${res.status} ${txt}`);
+    }
   }
 
   private async updateCommentViaApi(projectId: string, issueId: string, commentId: string, body: string): Promise<void> {
@@ -397,7 +534,8 @@ export class PlaneAdapter implements Adapter {
     const issueUrl =
       `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}` +
       `/issues/${String(issueId)}/comments/${String(commentId)}/`;
-    const commentHtml = this.renderCommentHtml(body);
+    const commentHtml = await this.renderCommentHtmlWithMentions(body);
+    const commentJson = await this.renderCommentJsonWithMentions(body);
 
     let res = await fetch(workItemUrl, {
       method: 'PATCH',
@@ -405,7 +543,7 @@ export class PlaneAdapter implements Adapter {
         'Content-Type': 'application/json',
         'x-api-key': apiKey,
       },
-      body: JSON.stringify({ comment_html: commentHtml }),
+      body: JSON.stringify({ comment_html: commentHtml, comment_json: commentJson }),
     });
 
     if (!res.ok && (res.status === 404 || res.status === 405)) {
@@ -415,7 +553,7 @@ export class PlaneAdapter implements Adapter {
           'Content-Type': 'application/json',
           'x-api-key': apiKey,
         },
-        body: JSON.stringify({ comment_html: commentHtml }),
+        body: JSON.stringify({ comment_html: commentHtml, comment_json: commentJson }),
       });
     }
 
@@ -498,6 +636,182 @@ export class PlaneAdapter implements Adapter {
       .map((p) => `<p>${p.replace(/\n/g, '<br/>')}</p>`);
 
     return paragraphs.length > 0 ? paragraphs.join('') : '<p></p>';
+  }
+
+  private escapeRegex(input: string): string {
+    return String(input).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  private async getMembersByDisplayName(): Promise<Map<string, string>> {
+    if (this.membersByDisplayNameCache) return this.membersByDisplayNameCache;
+
+    // Best-effort: Plane "members" CLI can be called without project context.
+    // Our deployment uses display_name like "lukas.kaiser" (username field may be null).
+    let raw: any;
+    try {
+      raw = await this.runJson(['members']);
+    } catch {
+      raw = [];
+    }
+
+    const members = Array.isArray(raw)
+      ? raw
+      : raw && typeof raw === 'object'
+        ? Array.isArray((raw as any).results)
+          ? (raw as any).results
+          : Array.isArray((raw as any).items)
+            ? (raw as any).items
+            : []
+        : [];
+
+    const out = new Map<string, string>();
+    for (const m of members) {
+      if (!m || typeof m !== 'object') continue;
+      const id = m.id != null ? String(m.id).trim() : '';
+      const display = m.display_name != null ? String(m.display_name).trim() : '';
+      if (!id || !display) continue;
+      out.set(display.toLowerCase(), id);
+    }
+
+    this.membersByDisplayNameCache = out;
+    return out;
+  }
+
+  private async renderCommentHtmlWithMentions(body: string): Promise<string> {
+    const raw = String(body ?? '');
+
+    // Fast-path: if there is no '@' at all, avoid any member lookup (keeps addComment lightweight).
+    if (!raw.includes('@')) return this.renderCommentHtml(raw);
+
+    // Render our normal safe HTML first.
+    let html = this.renderCommentHtml(raw);
+
+    // Then replace known @display_name tokens with Plane mention markup.
+    // Note: Plane mentions are editor-specific; in our deployment a <span data-type="mention" ...>
+    // is rendered as an actual mention in the UI, while plain "@name" is just text.
+    const members = await this.getMembersByDisplayName();
+    if (members.size === 0) return html;
+
+    for (const [displayLower, id] of members.entries()) {
+      const display = displayLower; // already lower-case key
+      // We match case-insensitively but preserve the canonical display_name in the rendered label.
+      const pattern = new RegExp(`(^|[>\\s])@${this.escapeRegex(display)}(?=($|[\\s<.,;:!?)]))`, 'gi');
+      html = html.replace(pattern, `$1<span data-type="mention" data-id="${id}" data-label="${display}">@${display}</span>`);
+    }
+
+    return html;
+  }
+
+  private async renderCommentJsonWithMentions(body: string): Promise<any> {
+    const raw = String(body ?? '').replace(/\r\n?/g, '\n').trimEnd();
+    if (!raw) return { type: 'doc', content: [{ type: 'paragraph', content: [] }] };
+
+    // TipTap JSONContent payload. Plane uses this to understand mentions.
+    // comment_html alone can render spans but does not always trigger mention behavior.
+    const members = raw.includes('@') ? await this.getMembersByDisplayName() : new Map<string, string>();
+
+    const isBoundaryBefore = (text: string, idx: number): boolean => {
+      if (idx <= 0) return true;
+      return /\s/.test(text[idx - 1] ?? '');
+    };
+    const isBoundaryAfter = (text: string, idxAfter: number): boolean => {
+      if (idxAfter >= text.length) return true;
+      return /[\s<.,;:!?)]/.test(text[idxAfter] ?? '');
+    };
+
+    const parseLine = (line: string): any[] => {
+      if (!members.size || !line.includes('@')) return line ? [{ type: 'text', text: line }] : [];
+
+      const out: any[] = [];
+      const rx = /@([A-Za-z0-9._-]+)/g;
+      let last = 0;
+      for (;;) {
+        const m = rx.exec(line);
+        if (!m) break;
+        const full = m[0];
+        const name = m[1] ?? '';
+        const start = m.index;
+        const end = start + full.length;
+
+        if (!isBoundaryBefore(line, start) || !isBoundaryAfter(line, end)) continue;
+
+        const memberId = members.get(String(name).toLowerCase());
+        if (!memberId) continue;
+
+        if (start > last) {
+          const chunk = line.slice(last, start);
+          if (chunk) out.push({ type: 'text', text: chunk });
+        }
+
+        out.push({ type: 'mention', attrs: { id: memberId, label: String(name) } });
+        last = end;
+      }
+
+      if (last < line.length) {
+        const tail = line.slice(last);
+        if (tail) out.push({ type: 'text', text: tail });
+      }
+
+      return out;
+    };
+
+    const paragraphs = raw.split(/\n{2,}/);
+    const content: any[] = [];
+
+    for (const p of paragraphs) {
+      const lines = p.split('\n');
+      const nodes: any[] = [];
+
+      lines.forEach((line, i) => {
+        if (i > 0) nodes.push({ type: 'hardBreak' });
+        nodes.push(...parseLine(line));
+      });
+
+      content.push({ type: 'paragraph', content: nodes });
+    }
+
+    return { type: 'doc', content };
+  }
+
+  /**
+   * Return @display_name mention strings for all stakeholders of a ticket
+   * (creator + assignees) excluding the bot's own user.
+   * Useful for appending to completion comments so humans get notified.
+   */
+  async getStakeholderMentions(ticketId: string): Promise<string[]> {
+    try {
+      const me = await this.whoami();
+      const meId = me.id;
+      const members = await this.getMembersByDisplayName();
+      // Build reverse map: id -> display_name
+      const idToDisplay = new Map<string, string>();
+      for (const [display, id] of members.entries()) {
+        idToDisplay.set(id, display);
+      }
+
+      const snap = await this.fetchSnapshot();
+      const item = snap instanceof Map ? snap.get(ticketId) : (snap as Record<string, any>)[ticketId];
+      if (!item) return [];
+
+      const raw = (item as any).raw ?? item;
+      const creatorId = extractIssueCreatorId(raw);
+      const assigneeIds = extractIssueAssigneeIds(raw);
+
+      const stakeholderIds = new Set<string>();
+      if (creatorId) stakeholderIds.add(creatorId);
+      for (const a of assigneeIds) stakeholderIds.add(a);
+      // Remove self
+      if (meId) stakeholderIds.delete(meId);
+
+      const mentions: string[] = [];
+      for (const id of stakeholderIds) {
+        const display = idToDisplay.get(id);
+        if (display) mentions.push(`@${display}`);
+      }
+      return mentions;
+    } catch {
+      return [];
+    }
   }
 
   private readonly statesCacheByProject = new Map<string, PlaneState[]>();
@@ -623,9 +937,35 @@ export class PlaneAdapter implements Adapter {
   }
 
   async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
-    const snap = await this.fetchSnapshot();
-    return [...snap.values()]
-      .filter((i) => i.stage.key === stage)
+    // Strict self-assigned gating (aligned with listBacklogIdsInOrder).
+    // Without this, automation like auto-reopen can change states for tickets that
+    // are not assigned to the worker user.
+    const me = await this.whoami();
+    const meId = me.id;
+
+    const merged: Array<{ id: string; updatedAt?: Date; assignees?: Array<{ id?: string; username?: string; name?: string } | string> }> = [];
+
+    for (const projectId of this.projectIds) {
+      const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: meId });
+      const issues = normalizePlaneIssuesList(issuesRaw);
+      const snap = await this.fetchSnapshotForProject(projectId, issues);
+
+      let items = [...snap.values()].filter((i) => i.stage.key === stage);
+
+      // Hard safety: if assignee data is present, enforce self-assigned only.
+      if (meId) {
+        const hasAnyAssigneeData = items.some((i) => (i.assignees ?? []).length > 0);
+        if (hasAnyAssigneeData) {
+          items = items.filter((i) => (i.assignees ?? []).some((a) => assigneeMatchesSelf(a, me)));
+        }
+      }
+
+      for (const item of items) {
+        merged.push({ id: item.id, updatedAt: item.updatedAt, assignees: item.assignees });
+      }
+    }
+
+    return merged
       // deterministic order: oldest update first so ongoing work remains primary
       .sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0))
       .map((i) => i.id);
@@ -730,6 +1070,7 @@ export class PlaneAdapter implements Adapter {
   async getWorkItem(id: string): Promise<{
     id: string;
     projectId?: string;
+    identifier?: string;
     title: string;
     url?: string;
     stage: import('../stage.js').StageKey;
@@ -747,17 +1088,37 @@ export class PlaneAdapter implements Adapter {
     const projectId = await this.resolveProjectIdForIssue(id, 'getWorkItem');
     let body = extractIssueBody(item.raw);
 
+    let sequenceId: number | undefined;
+
     // Fetch issue details for richer/full description where list payload is truncated.
     try {
       const details = await this.getIssueRaw(projectId, id);
       body = extractIssueBody(details) ?? body;
+      const seq = (details as any)?.sequence_id ?? (details as any)?.sequenceId;
+      const n = Number(seq);
+      if (Number.isFinite(n) && n > 0) sequenceId = Math.floor(n);
     } catch {
       // Best-effort, never fail read path because detail endpoint shape varies.
+    }
+
+    if (!sequenceId) {
+      const seq = (item.raw as any)?.sequence_id ?? (item.raw as any)?.sequenceId;
+      const n = Number(seq);
+      if (Number.isFinite(n) && n > 0) sequenceId = Math.floor(n);
+    }
+
+    let identifier: string | undefined;
+    if (sequenceId) {
+      const projectIdentifier = await this.getProjectIdentifier(projectId);
+      if (projectIdentifier) {
+        identifier = `${projectIdentifier}-${sequenceId}`;
+      }
     }
 
     return {
       id: item.id,
       projectId,
+      identifier,
       title: item.title,
       url: item.url,
       stage: item.stage.key,
@@ -770,7 +1131,7 @@ export class PlaneAdapter implements Adapter {
 
   async listComments(
     id: string,
-    opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+    opts: { limit?: number; newestFirst: boolean; includeInternal: boolean },
   ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { id?: string; username?: string; name?: string } }>> {
     const projectId = await this.resolveProjectIdForIssue(id, 'listComments');
     const raw = await this.listCommentsViaApi(projectId, id);
@@ -806,7 +1167,10 @@ export class PlaneAdapter implements Adapter {
       return bt - at;
     });
     const ordered = opts.newestFirst ? mapped : [...mapped].reverse();
-    return ordered.slice(0, Math.max(1, opts.limit));
+
+    const limit = opts.limit;
+    if (limit == null) return ordered;
+    return ordered.slice(0, Math.max(1, limit));
   }
 
   async listAttachments(_id: string): Promise<Array<{ filename: string; url: string }>> {
@@ -840,6 +1204,35 @@ export class PlaneAdapter implements Adapter {
 
     // Primary path: direct Plane API comments endpoint (avoids CLI 405 behavior).
     await this.postCommentViaApi(projectId, String(id), msg);
+  }
+
+  async addLinks(id: string, links: ExternalLinkInput[]): Promise<void> {
+    const items = Array.isArray(links) ? links : [];
+    if (items.length === 0) return;
+
+    const projectId = await this.resolveProjectIdForIssue(id, 'addLinks');
+
+    const normalized = items
+      .map((l) => ({
+        title: String((l as any)?.title ?? '').trim(),
+        url: String((l as any)?.url ?? '').trim(),
+      }))
+      .filter((l) => l.url.length > 0);
+
+    if (normalized.length === 0) return;
+
+    const existing = await this.listLinksViaApi(projectId, String(id));
+    const existingUrls = new Set(
+      existing
+        .map((x: any) => String(x?.url ?? '').trim())
+        .filter((u: string) => u.length > 0),
+    );
+
+    for (const link of normalized) {
+      if (existingUrls.has(link.url)) continue;
+      await this.createLinkViaApi(projectId, String(id), link);
+      existingUrls.add(link.url);
+    }
   }
 
   async updateComment(id: string, commentId: string, body: string): Promise<void> {

@@ -1,11 +1,19 @@
 import type { SessionMap } from '../automation/session_dispatcher.js';
 
 const LEGACY_QUEUE_MARKER = '[kwf:queue-position]';
-const QUEUE_COMMENT_TEMPLATE_VERSION = 2;
+const QUEUE_COMMENT_TEMPLATE_VERSION = 3;
 const DEFAULT_AVERAGE_DURATION_MS = 20 * 60 * 1000;
-const QUEUE_TEXT_PREFIX = 'There are ';
-const QUEUE_TEXT_MIDDLE = ' tickets with higher priority that I need to complete (';
-const QUEUE_TEXT_SUFFIX = ') before this ticket can be started. If this is urgent, change the priority.';
+
+// Keep v2 constants for detection/cleanup.
+const QUEUE_TEXT_PREFIX_V2 = 'There are ';
+const QUEUE_TEXT_MIDDLE_V2 = ' tickets with higher priority that I need to complete (';
+const QUEUE_TEXT_SUFFIX_V2 = ') before this ticket can be started. If this is urgent, change the priority.';
+
+// v3 template: explicitly clarifies that no explicit handoff is needed.
+const QUEUE_TEXT_PREFIX_V3 = 'There are ';
+const QUEUE_TEXT_MIDDLE_V3 = ' tickets with higher priority that I need to complete (';
+const QUEUE_TEXT_SUFFIX_V3 =
+  ') before I start this ticket. No explicit handoff is needed, I will pick it up automatically when it reaches the top. If this is urgent, change the priority.';
 
 function etaDisplayFromMs(ms: number): string {
   if (!Number.isFinite(ms) || ms <= 0) return '<1h';
@@ -24,7 +32,7 @@ function averageDurationMsFromRecentSamples(samples: number[] | undefined): numb
 function messageForHigherPriorityCount(higherPriorityCount: number, averageDurationMs: number): string {
   const estimateMs = (higherPriorityCount + 1) * averageDurationMs;
   const eta = etaDisplayFromMs(estimateMs);
-  return `${QUEUE_TEXT_PREFIX}${higherPriorityCount}${QUEUE_TEXT_MIDDLE}${eta}${QUEUE_TEXT_SUFFIX}`;
+  return `${QUEUE_TEXT_PREFIX_V3}${higherPriorityCount}${QUEUE_TEXT_MIDDLE_V3}${eta}${QUEUE_TEXT_SUFFIX_V3}`;
 }
 
 function renderQueueComment(higherPriorityCount: number, averageDurationMs: number): string {
@@ -43,11 +51,17 @@ function isQueueManagedComment(comment: { body: string; author?: { id?: string; 
   const body = String(comment.body ?? '');
   const hasLegacyMarker = body.includes(LEGACY_QUEUE_MARKER);
   const normalized = normalizeText(body);
-  const hasQueueTemplate =
-    normalized.startsWith(normalizeText(QUEUE_TEXT_PREFIX)) &&
-    normalized.includes(normalizeText(QUEUE_TEXT_MIDDLE)) &&
-    normalized.includes(normalizeText(QUEUE_TEXT_SUFFIX));
-  return hasLegacyMarker || hasQueueTemplate;
+  const hasQueueTemplateV2 =
+    normalized.startsWith(normalizeText(QUEUE_TEXT_PREFIX_V2)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_MIDDLE_V2)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_SUFFIX_V2));
+
+  const hasQueueTemplateV3 =
+    normalized.startsWith(normalizeText(QUEUE_TEXT_PREFIX_V3)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_MIDDLE_V3)) &&
+    normalized.includes(normalizeText(QUEUE_TEXT_SUFFIX_V3));
+
+  return hasLegacyMarker || hasQueueTemplateV2 || hasQueueTemplateV3;
 }
 
 export type QueuePositionReconcileResult = {

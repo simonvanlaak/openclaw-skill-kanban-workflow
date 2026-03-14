@@ -18,9 +18,16 @@ export type WorkItemAttachment = {
   url: string;
 };
 
+export type ExternalLinkInput = {
+  title: string;
+  url: string;
+};
+
 export type WorkItemDetails = {
   id: string;
   projectId?: string;
+  /** Human-readable work item identifier, e.g. JULES-243 (preferred for session naming). */
+  identifier?: string;
   title: string;
   url?: string;
   stage: StageKey;
@@ -66,7 +73,7 @@ export type WorkItemReadPort = {
 
   listComments(
     id: string,
-    opts: { limit: number; newestFirst: boolean; includeInternal: boolean },
+    opts: { limit?: number; newestFirst: boolean; includeInternal: boolean },
   ): Promise<WorkItemComment[]>;
   listAttachments(id: string): Promise<WorkItemAttachment[]>;
   listLinkedWorkItems(id: string): Promise<WorkItemLink[]>;
@@ -75,6 +82,8 @@ export type WorkItemReadPort = {
 export type WorkItemWritePort = {
   setStage(id: string, stage: StageKey): Promise<void>;
   addComment(id: string, body: string): Promise<void>;
+  /** Add URL links to the work item (e.g. internal Nextcloud deliverables). */
+  addLinks(id: string, links: ExternalLinkInput[]): Promise<void>;
   updateComment(id: string, commentId: string, body: string): Promise<void>;
   deleteComment(id: string, commentId: string): Promise<void>;
   createInBacklogAndAssignToSelf(input: CreateInput): Promise<{ id: string; url?: string }>;

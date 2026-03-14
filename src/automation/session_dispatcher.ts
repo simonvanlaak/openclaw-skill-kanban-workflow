@@ -80,6 +80,14 @@ type TicketContext = {
   comments: Array<{ at?: string; author?: string; authorId?: string; authorName?: string; body?: string; internal?: boolean }>;
   attachments: Array<{ name?: string; url?: string }>;
   links: Array<{ id?: string; title?: string; url?: string; relation?: string }>;
+  potentialDuplicates: Array<{
+    id?: string;
+    identifier?: string;
+    title?: string;
+    url?: string;
+    stage?: string;
+    score?: number;
+  }>;
 };
 
 const WORKER_POLICY_DIGEST = [
@@ -87,6 +95,8 @@ const WORKER_POLICY_DIGEST = [
   '- Execute at least one concrete step this turn unless truly blocked.',
   '- Reply with strict JSON only.',
   '- Follow WORKER_RESULT_JSON_SCHEMA_CONTRACT exactly.',
+  '- Plane CLI: always start with: source /root/.openclaw/workspace/scripts/plane_env.sh',
+  '- Before implementation, scan potentialDuplicates and sanity-check for duplicates.',
   '- If unsure and clarification is needed, use decision="uncertain" with clarification_questions.',
   '- Keep output concise and evidence-backed; avoid boilerplate.',
 ].join('\n');
@@ -271,7 +281,11 @@ function ensureSessionForTicket(
   sessionDisplayId?: string,
 ): { sessionId: string; sessionLabel: string; reused: boolean } {
   const existing = map.sessionsByTicket[ticketId];
-  const effectiveDisplayId = ticketId;
+
+  // Prefer the human-readable issue key for session naming, e.g. JULES-243.
+  // If we cannot resolve it, fall back to the opaque ticket id.
+  const effectiveDisplayId = (sessionDisplayId ?? '').trim() || ticketId;
+
   const preferredSessionId = makeSessionId(ticketId, new Date(nowIso), ticketTitle, effectiveDisplayId);
   const sessionLabel = ticketTitle
     ? makeSessionLabel(effectiveDisplayId, ticketTitle)
@@ -280,12 +294,30 @@ function ensureSessionForTicket(
   if (existing && !existing.closedAt) {
     const previousState = existing.lastState;
     let sessionId = existing.sessionId;
-    const shouldUpgradeLegacyId =
-      preferredSessionId !== sessionId &&
-      looksLegacyWorkerSessionId(sessionId) &&
-      !!sanitizeSessionToken(effectiveDisplayId);
 
-    if (shouldUpgradeLegacyId) {
+    const matchesIssueKey = (value: string): { project: string; seq: string } | null => {
+      const m = value.match(/^([a-z][a-z0-9]+)-(\d+)$/i);
+      if (!m) return null;
+      return { project: m[1].toLowerCase(), seq: m[2] };
+    };
+
+    const preferredKey = matchesIssueKey(preferredSessionId);
+    const existingKey = matchesIssueKey(sessionId);
+
+    const shouldUpgradeToPreferred =
+      preferredSessionId !== sessionId &&
+      !!sanitizeSessionToken(effectiveDisplayId) &&
+      (
+        looksLegacyWorkerSessionId(sessionId) ||
+        looksOpaqueTicketId(sessionId) ||
+        sessionId === sanitizeSessionToken(ticketId) ||
+        sessionId.startsWith('ticket-') ||
+        // If we previously extracted the wrong issue key from free text (e.g. an example like JULES-243),
+        // but we can now resolve the canonical identifier (e.g. JULES-248), upgrade the session id.
+        (preferredKey != null && existingKey != null && preferredKey.project === existingKey.project && preferredKey.seq !== existingKey.seq)
+      );
+
+    if (shouldUpgradeToPreferred) {
       sessionId = preferredSessionId;
       existing.sessionId = sessionId;
     }
@@ -297,16 +329,32 @@ function ensureSessionForTicket(
     }
     existing.sessionLabel = sessionLabel;
     map.active = { ticketId, sessionId };
-    return { sessionId, sessionLabel, reused: !shouldUpgradeLegacyId };
+    return { sessionId, sessionLabel, reused: !shouldUpgradeToPreferred };
   }
 
   const active = map.active;
   if (active && active.ticketId === ticketId) {
-    const shouldUpgradeActiveLegacyId =
+    const matchesIssueKey = (value: string): { project: string; seq: string } | null => {
+      const m = value.match(/^([a-z][a-z0-9]+)-(\d+)$/i);
+      if (!m) return null;
+      return { project: m[1].toLowerCase(), seq: m[2] };
+    };
+
+    const preferredKey = matchesIssueKey(preferredSessionId);
+    const activeKey = matchesIssueKey(active.sessionId);
+
+    const shouldUpgradeActiveId =
       preferredSessionId !== active.sessionId &&
-      looksLegacyWorkerSessionId(active.sessionId) &&
-      !!sanitizeSessionToken(effectiveDisplayId);
-    const resolvedActiveSessionId = shouldUpgradeActiveLegacyId ? preferredSessionId : active.sessionId;
+      !!sanitizeSessionToken(effectiveDisplayId) &&
+      (
+        looksLegacyWorkerSessionId(active.sessionId) ||
+        looksOpaqueTicketId(active.sessionId) ||
+        active.sessionId === sanitizeSessionToken(ticketId) ||
+        active.sessionId.startsWith('ticket-') ||
+        (preferredKey != null && activeKey != null && preferredKey.project === activeKey.project && preferredKey.seq !== activeKey.seq)
+      );
+
+    const resolvedActiveSessionId = shouldUpgradeActiveId ? preferredSessionId : active.sessionId;
     map.active = { ticketId, sessionId: resolvedActiveSessionId };
 
     const activeEntry = map.sessionsByTicket[ticketId];
@@ -316,7 +364,7 @@ function ensureSessionForTicket(
       activeEntry.lastState = 'in_progress';
       activeEntry.lastSeenAt = nowIso;
       if (!activeEntry.workStartedAt) activeEntry.workStartedAt = nowIso;
-      return { sessionId: resolvedActiveSessionId, sessionLabel, reused: !shouldUpgradeActiveLegacyId };
+      return { sessionId: resolvedActiveSessionId, sessionLabel, reused: !shouldUpgradeActiveId };
     }
 
     map.sessionsByTicket[ticketId] = {
@@ -326,7 +374,7 @@ function ensureSessionForTicket(
       lastSeenAt: nowIso,
       workStartedAt: nowIso,
     };
-    return { sessionId: resolvedActiveSessionId, sessionLabel, reused: !shouldUpgradeActiveLegacyId };
+    return { sessionId: resolvedActiveSessionId, sessionLabel, reused: !shouldUpgradeActiveId };
   }
 
   const sessionId = preferredSessionId;
@@ -454,6 +502,12 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
     ...(Array.isArray(payload?.links) ? payload.links : []),
   ];
 
+  const potentialDuplicatesRaw: any[] = Array.isArray(payload?.potentialDuplicates)
+    ? payload.potentialDuplicates
+    : Array.isArray(payload?.similarTickets)
+      ? payload.similarTickets
+      : [];
+
   const comments = commentsRaw.map((c) => {
     const author = normalizeCommentAuthor(c?.author);
     return {
@@ -489,6 +543,17 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
       return true;
     });
 
+  const potentialDuplicates = potentialDuplicatesRaw
+    .map((d) => ({
+      id: d?.id != null ? String(d.id) : undefined,
+      identifier: d?.identifier != null ? String(d.identifier) : undefined,
+      title: d?.title != null ? String(d.title) : undefined,
+      url: d?.url != null ? String(d.url) : undefined,
+      stage: d?.stage != null ? String(d.stage) : undefined,
+      score: typeof d?.score === 'number' && Number.isFinite(d.score) ? d.score : undefined,
+    }))
+    .filter((d) => Boolean(d.id || d.identifier || d.title || d.url));
+
   return {
     id: String(item?.id ?? fallbackTicketId),
     projectId: item?.projectId ? String(item.projectId) : item?.project_id ? String(item.project_id) : undefined,
@@ -501,6 +566,7 @@ function extractTicketContext(payload: any, fallbackTicketId: string): TicketCon
       url: a?.url ? String(a.url) : undefined,
     })),
     links: mergedLinks,
+    potentialDuplicates,
   };
 }
 
@@ -555,9 +621,10 @@ function compactContextForPrompt(context: TicketContext): Record<string, unknown
   if (context.title) compact.title = context.title;
   if (context.body) compact.body = trimForPrompt(context.body, 5000);
   if (context.url) compact.url = context.url;
-  if (context.comments.length > 0) compact.comments = context.comments.slice(0, 10);
+  if (context.comments.length > 0) compact.comments = context.comments;
   if (context.attachments.length > 0) compact.attachments = context.attachments;
   if (context.links.length > 0) compact.links = context.links;
+  if (context.potentialDuplicates.length > 0) compact.potentialDuplicates = context.potentialDuplicates;
   return compact;
 }
 
@@ -596,6 +663,10 @@ function buildWorkInstruction(params: {
     `Goal: ${context.title ?? 'Continue assigned ticket execution.'}`,
     `Session label: ${params.sessionLabel}`,
     'Expected output: strict JSON result for forced decision (blocked|completed|uncertain).',
+    '',
+    'PREWORK (reduce duplicates):',
+    '- Before doing implementation, search for similar Plane tickets by keywords from title/body.',
+    '- Use CONTEXT_JSON.potentialDuplicates as a starting point, but verify in Plane.',
     '',
     'DELTA_SINCE_LAST_TURN',
     delta,
@@ -649,7 +720,7 @@ export function buildWorkflowLoopPlan(params: {
 
     if (nextTicketId) {
       const nextTicketTitle = output?.nextTicket?.item?.title ? String(output.nextTicket.item.title) : undefined;
-      const nextTicketDisplayId = nextTicketId;
+      const nextTicketDisplayId = resolveSessionDisplayId(nextTicketId, output?.nextTicket);
       const previousEntry = map.sessionsByTicket[nextTicketId];
       const { sessionId, sessionLabel, reused } = ensureSessionForTicket(
         map,
@@ -685,7 +756,7 @@ export function buildWorkflowLoopPlan(params: {
 
   if (currentTicketId) {
     const currentTicketTitle = activeTicketPayload?.item?.title ? String(activeTicketPayload.item.title) : undefined;
-    const currentTicketDisplayId = currentTicketId;
+    const currentTicketDisplayId = resolveSessionDisplayId(currentTicketId, activeTicketPayload);
     const previousEntry = map.sessionsByTicket[currentTicketId];
     const { sessionId, sessionLabel, reused } = ensureSessionForTicket(
       map,

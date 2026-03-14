@@ -156,6 +156,87 @@ function isAssignedToSelf(assignees: readonly { id?: string; username?: string; 
   return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
 }
 
+/** Tokenize a string into lowercase alphanumeric words (3+ chars). */
+function tokenize(text: string): Set<string> {
+  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
+  return new Set(words.filter((w) => w.length >= 3));
+}
+
+/** Jaccard similarity between two token sets (0..1). */
+function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 && b.size === 0) return 0;
+  let intersection = 0;
+  for (const tok of a) {
+    if (b.has(tok)) intersection++;
+  }
+  const union = a.size + b.size - intersection;
+  return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Find potential duplicate tickets across all open stages by comparing title similarity.
+ * Returns up to `maxResults` candidates sorted by descending similarity score.
+ */
+async function findPotentialDuplicates(
+  adapter: any,
+  selectedTicketId: string,
+  selectedTitle: string,
+  maxResults = 10,
+): Promise<Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }>> {
+  const selectedTokens = tokenize(selectedTitle);
+  if (selectedTokens.size === 0) return [];
+
+  // Gather candidate IDs from all open stages (deduplicated, excluding the selected ticket).
+  const stageKeys: Array<import('./stage.js').StageKey> = ['stage:todo', 'stage:blocked', 'stage:in-progress', 'stage:in-review'];
+  const candidateIds = new Set<string>();
+  for (const stage of stageKeys) {
+    try {
+      const ids: string[] = await adapter.listIdsByStage(stage);
+      for (const id of ids) {
+        if (id !== selectedTicketId) candidateIds.add(id);
+      }
+    } catch {
+      // If a stage isn't configured or errors, skip it.
+    }
+  }
+
+  // Also include backlog items not yet captured.
+  try {
+    const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
+    for (const id of backlogIds) {
+      if (id !== selectedTicketId) candidateIds.add(id);
+    }
+  } catch {
+    // best-effort
+  }
+
+  // Score each candidate by title similarity.
+  const scored: Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }> = [];
+  for (const id of candidateIds) {
+    try {
+      const item = await adapter.getWorkItem(id);
+      const title = String(item?.title ?? '');
+      const tokens = tokenize(title);
+      const score = jaccardSimilarity(selectedTokens, tokens);
+      if (score > 0.15) {
+        scored.push({
+          id,
+          identifier: item?.identifier,
+          title,
+          url: item?.url,
+          stage: item?.stage,
+          score: Math.round(score * 1000) / 1000,
+        });
+      }
+    } catch {
+      // Skip items that fail to load.
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, maxResults);
+}
+
 async function runWorkflowLoopSelection(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:todo'): Promise<any> {
   const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun, requeueTargetStage });
   const me = await adapter.whoami();
@@ -177,9 +258,13 @@ async function runWorkflowLoopSelection(adapter: any, dryRun: boolean, requeueTa
         await adapter.setStage(extra.id, 'stage:todo');
       }
     }
+    const payload = await show(adapter, keep.id);
+    const potentialDuplicates = await findPotentialDuplicates(
+      adapter, keep.id, String(payload?.item?.title ?? ''),
+    );
     return {
       tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
-      nextTicket: await show(adapter, keep.id),
+      nextTicket: { ...payload, potentialDuplicates },
       autoReopen,
       dryRun,
     };
@@ -192,9 +277,13 @@ async function runWorkflowLoopSelection(adapter: any, dryRun: boolean, requeueTa
     if (!dryRun) {
       await start(adapter, id);
     }
+    const payload = await show(adapter, id);
+    const potentialDuplicates = await findPotentialDuplicates(
+      adapter, id, String(payload?.item?.title ?? ''),
+    );
     return {
       tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
-      nextTicket: await show(adapter, id),
+      nextTicket: { ...payload, potentialDuplicates },
       autoReopen,
       dryRun,
     };
@@ -604,12 +693,35 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           detail = `decision=blocked; retryCount=${retryCount}`;
         }
 
+        const workerLinks = validation.ok ? validation.value.links : undefined;
+
         try {
           if (parsed.kind === 'completed') {
-            await update(adapter, action.ticketId, parsed.result);
+            // Append @mentions for stakeholders so they get notified of completion.
+            let commentText = parsed.result;
+            if (typeof (adapter as any).getStakeholderMentions === 'function') {
+              const mentions: string[] = await (adapter as any).getStakeholderMentions(action.ticketId);
+              if (mentions.length > 0) {
+                commentText += `\n\ncc ${mentions.join(' ')} - ready for review.`;
+              }
+            }
+            await update(adapter, action.ticketId, commentText);
             await setStage(adapter, action.ticketId, 'stage:in-review');
           } else {
-            await ask(adapter, action.ticketId, parsed.text);
+            // Append @mentions for blocked/uncertain so stakeholders are aware.
+            let askText = parsed.text;
+            if (typeof (adapter as any).getStakeholderMentions === 'function') {
+              const mentions: string[] = await (adapter as any).getStakeholderMentions(action.ticketId);
+              if (mentions.length > 0) {
+                const verb = parsed.kind === 'blocked' ? 'blocked, needs input' : 'needs clarification';
+                askText += `\n\ncc ${mentions.join(' ')} - ${verb}.`;
+              }
+            }
+            await ask(adapter, action.ticketId, askText);
+          }
+
+          if (Array.isArray(workerLinks) && workerLinks.length > 0 && typeof (adapter as any).addLinks === 'function') {
+            await (adapter as any).addLinks(action.ticketId, workerLinks);
           }
 
           const appliedAt = new Date();

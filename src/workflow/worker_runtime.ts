@@ -271,13 +271,46 @@ async function startWorkerDelegation(
     fs.writeFile(paths.metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8'),
   ]);
 
-  const timeoutSeconds = timeoutMsToSeconds(backgroundTimeoutMs);
+  // IMPORTANT: Do not use `openclaw agent --session-id ...` here.
+  // That CLI path routes agent sessions under `agent:<agentId>:main` and only mutates the
+  // internal sessionId field, which collapses all tickets into the same "main" session.
+  //
+  // Instead, background delegation must target an explicit sessionKey, same as the
+  // synchronous gatewayCall path.
+  const sessionKey = workerSessionKey(params.agentId, params.sessionId);
+
   const script = [
     'set +e',
-    `openclaw agent --agent ${shellQuote(params.agentId)} --session-id ${shellQuote(params.sessionId)} --thinking ${shellQuote(params.thinking)} --timeout ${timeoutSeconds} --message "$(cat ${shellQuote(paths.messagePath)})" --json > ${shellQuote(paths.resultPath)} 2> ${shellQuote(paths.stderrPath)}`,
-    'status=$?',
-    `printf "%s\\n" "$status" > ${shellQuote(paths.exitCodePath)}`,
-    `touch ${shellQuote(paths.donePath)}`,
+    `session_key=${shellQuote(sessionKey)}`,
+    // Gateway RPC requires auth token; do not print it into logs.
+    'gateway_token=$(jq -r \'.gateway.auth.token\' /root/.openclaw/openclaw.json)',
+    // millisecond epoch, consistent with chat.history timestamps
+    'since_ts=$(date +%s%3N)',
+    // stable idempotency key for this background dispatch
+    'idem=$(python3 - <<"PY"\nimport uuid\nprint(uuid.uuid4())\nPY\n)',
+    `msg=$(cat ${shellQuote(paths.messagePath)})`,
+    `send_params=$(jq -cn --arg sessionKey "$session_key" --arg message "$msg" --arg idempotencyKey "$idem" '{sessionKey:$sessionKey,message:$message,idempotencyKey:$idempotencyKey}')`,
+    // Fire-and-forget dispatch
+    `openclaw gateway call chat.send --token "$gateway_token" --timeout 15000 --json --params "$send_params" >/dev/null 2>> ${shellQuote(paths.stderrPath)}`,
+    // Poll for the latest assistant text after since_ts.
+    `deadline=$(( since_ts + ${Math.floor(backgroundTimeoutMs)} ))`,
+    'while true; do',
+    '  now=$(date +%s%3N)',
+    '  if [ "$now" -ge "$deadline" ]; then',
+    '    break',
+    '  fi',
+    `  hist_params=$(jq -cn --arg sessionKey "$session_key" '{sessionKey:$sessionKey,limit:20}')`,
+    `  hist=$(openclaw gateway call chat.history --token "$gateway_token" --timeout 15000 --json --params "$hist_params" 2>> ${shellQuote(paths.stderrPath)} || true)`,
+    // Mirror extractLatestAssistantTextSince(): role=assistant, content[].type=text
+    `  text=$(printf "%s" "$hist" | jq -r --argjson since "$since_ts" '[.messages[] | select(.role=="assistant" and (.timestamp|tonumber) > $since) | ([.content[]? | select((.type|ascii_downcase)=="text") | (.text // "") | select(length>0)] | join("\\n") ) | select(length>0)] | last // empty')`,
+    '  if [ -n "$text" ]; then',
+    `    printf "%s" "$text" > ${shellQuote(paths.resultPath)}`,
+    `    printf "0\\n" > ${shellQuote(paths.exitCodePath)}`,
+    `    touch ${shellQuote(paths.donePath)}`,
+    '    break',
+    '  fi',
+    '  sleep 1.2',
+    'done',
   ].join('\n');
 
   const detached: any = execa('bash', ['-lc', script], { detached: true, stdio: 'ignore' } as any);
@@ -339,12 +372,17 @@ export async function loadWorkerDelegationState(
     throw new Error(`Background worker turn failed for ticket ${ticketId}: ${parsed.error ?? 'unknown error'}`);
   }
 
+  const fallbackRouting = {
+    sessionKey: workerSessionKey(meta.agentId, meta.sessionId),
+    sessionId: meta.sessionId,
+  };
+
   return {
     kind: 'completed',
     meta,
     workerOutput: parsed.workerOutput,
     raw: parsed.raw,
-    routing: parsed.routing,
+    routing: parsed.routing?.sessionKey || parsed.routing?.sessionId ? parsed.routing : fallbackRouting,
   };
 }
 

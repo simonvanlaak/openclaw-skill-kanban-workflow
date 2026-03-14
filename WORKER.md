@@ -3,6 +3,24 @@
 This file is loaded into every worker task prompt by `cron-dispatch`.
 Treat it as mandatory baseline policy for execution.
 
+## 0) CRITICAL: Plane CLI credential bootstrap (do this FIRST)
+
+**Before ANY `plane` CLI command**, you MUST run:
+
+```bash
+source /root/.openclaw/workspace/scripts/plane_env.sh
+```
+
+This wrapper resolves secrets from 1Password and exports `PLANE_API_KEY`, `PLANE_WORKSPACE`, and `PLANE_BASE_URL`. Without it, every `plane` command will fail with auth errors. Do not skip this step. Do not try to set these variables manually.
+
+## 0.1) Duplicate detection (mandatory prework)
+
+Before starting implementation on any ticket:
+
+1. Check the `potentialDuplicates` field in CONTEXT_JSON (pre-computed by the dispatcher).
+2. If any candidates have a high similarity score (>0.3), verify them in Plane before proceeding.
+3. If you confirm the ticket is a duplicate, use decision="uncertain" and flag it.
+
 ## 1) Work item truth + execution style
 
 - Use the provided `CONTEXT_JSON` as the source of truth for ticket facts in the current turn.
@@ -13,18 +31,9 @@ Treat it as mandatory baseline policy for execution.
 
 Use the Plane CLI skill as the default integration path.
 
-### Environment bootstrap
+### Environment bootstrap (reminder)
 
-- Load Plane environment first:
-
-```bash
-source /root/.openclaw/workspace/scripts/plane_env.sh
-```
-
-This wrapper resolves secrets from 1Password and exports:
-- `PLANE_API_KEY`
-- `PLANE_WORKSPACE`
-- `PLANE_BASE_URL`
+Already covered in section 0 above. Always run `source /root/.openclaw/workspace/scripts/plane_env.sh` first.
 
 ### Core Plane commands
 
@@ -43,31 +52,28 @@ If project/state/member IDs are missing, fetch them first (`plane projects list`
 - Use the dedicated `jules` Nextcloud account (never `admin` for routine operations).
 - Local files are temporary working copies only. Final output must be synced to Nextcloud and referenced in updates.
 
-## 3.1) Attach deliverable files to the Plane issue (mandatory)
+## 3.1) Add deliverables to the Plane ticket as Nextcloud links (mandatory)
 
-If you generate a file as part of delivering a ticket outcome (PDF/PNG/CSV/log export/MD/HTML/etc), you must also attach it to the corresponding Plane work item.
+Team preference: deliverables live in Nextcloud, and Plane should contain quick, durable pointers.
 
-Default path:
-- First upload the file to Nextcloud (source of truth) as usual.
-- Then attach the same local file to Plane using:
+If you generate a file as part of delivering a ticket outcome (PDF/PNG/CSV/log export/MD/HTML/etc), you must:
 
-```bash
-source /root/.openclaw/workspace/scripts/plane_env.sh
-/root/.openclaw/workspace/scripts/plane_attach_file.sh <PROJECT_ID> <ISSUE_ID> <LOCAL_FILE>
-```
+1) Upload it to Nextcloud (source of truth)
+2) Share it internally with the whole 4ok team (lukas, simon, jesper, olivia)
+3) Include the internal Nextcloud link in the worker JSON optional `links` field
 
-Preview UX note (team preference):
-- Plane attachments for .md/.txt require a download and do not preview inline.
-- For markdown deliverables, always upload to Nextcloud and include an **internal Nextcloud link** in the final completion comment.
-- Do not use public links by default. Ensure the whole 4ok team has access (lukas, simon, jesper, olivia).
-- Use the worker JSON optional `links` field (rendered into the Plane completion comment) for these URLs.
+The workflow-loop will:
+- render these links as clickable anchors in the Plane completion comment, and
+- also add them to the Plane work item "Links" section (URL links), so they are quickly found.
 
 Helper (share with team + print internal link):
 ```bash
 /root/.openclaw/workspace/scripts/nextcloud_share_internal_team_link.sh "/Jules-Research/<file>.md"
 ```
 
-If a file is too large or Plane upload fails, add a Plane comment with a stable Nextcloud public link and the reason (size limit, upload error, etc.).
+Fallback only:
+- If Nextcloud upload/sharing fails, post a Plane comment with the reason and the best available stable location.
+- Only attach a local file to Plane if explicitly requested or if there is no viable Nextcloud option.
 
 ## 4) Secrets + infrastructure rules
 

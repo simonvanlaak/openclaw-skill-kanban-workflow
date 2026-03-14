@@ -528,10 +528,82 @@ describe('PlaneAdapter', () => {
             'Content-Type': 'application/json',
             'x-api-key': 'test-key',
           },
-          body: JSON.stringify({ comment_html: '<p>hello</p>' }),
+          body: JSON.stringify({
+            comment_html: '<p>hello</p>',
+            comment_json: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }],
+            },
+          }),
         },
       );
       expect((execa as any).mock.calls.length).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+      if (oldKey == null) delete process.env.PLANE_API_KEY;
+      else process.env.PLANE_API_KEY = oldKey;
+      if (oldBase == null) delete process.env.PLANE_BASE_URL;
+      else process.env.PLANE_BASE_URL = oldBase;
+    }
+  });
+
+  it('implements addLinks via Plane links API', async () => {
+    const oldKey = process.env.PLANE_API_KEY;
+    const oldBase = process.env.PLANE_BASE_URL;
+    process.env.PLANE_API_KEY = 'test-key';
+    process.env.PLANE_BASE_URL = 'https://plane.example';
+
+    const fetchMock = vi
+      .fn()
+      // list links
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => [],
+        text: async () => '',
+      })
+      // create link
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        text: async () => '',
+      });
+    vi.stubGlobal('fetch', fetchMock as any);
+
+    try {
+      const adapter = new PlaneAdapter({
+        workspaceSlug: 'ws',
+        projectId: 'proj',
+        stageMap: {
+          Todo: 'stage:todo',
+        },
+      });
+
+      await adapter.addLinks('i9', [{ title: 'Nextcloud doc', url: 'https://docs.example/index.php/f/123' }]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        'https://plane.example/api/v1/workspaces/ws/projects/proj/work-items/i9/links/',
+        {
+          method: 'GET',
+          headers: {
+            'x-api-key': 'test-key',
+          },
+        },
+      );
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        2,
+        'https://plane.example/api/v1/workspaces/ws/projects/proj/work-items/i9/links/',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': 'test-key',
+          },
+          body: JSON.stringify({ url: 'https://docs.example/index.php/f/123', title: 'Nextcloud doc' }),
+        },
+      );
     } finally {
       vi.unstubAllGlobals();
       if (oldKey == null) delete process.env.PLANE_API_KEY;
