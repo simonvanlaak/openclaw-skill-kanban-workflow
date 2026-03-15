@@ -91,6 +91,7 @@ export async function reconcileQueuePositionComments(params: {
   adapter: QueueCommentAdapter;
   map: SessionMap;
   dryRun: boolean;
+  activeTicketId?: string | null;
 }): Promise<QueuePositionReconcileResult> {
   const state =
     params.map.queuePosition ??
@@ -106,7 +107,7 @@ export async function reconcileQueuePositionComments(params: {
   let unchanged = 0;
 
   const queueTicketIdsRaw = await params.adapter.listBacklogIdsInOrder();
-  const activeTicketId = currentActiveSession(params.map)?.ticketId;
+  const activeTicketId = params.activeTicketId ?? currentActiveSession(params.map)?.ticketId ?? null;
   // Defensive guard: backend/cache lag can briefly keep the active in-progress ticket
   // in backlog ordering. Never treat the active ticket as queued.
   const queueTicketIds = activeTicketId

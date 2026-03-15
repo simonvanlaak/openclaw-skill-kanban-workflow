@@ -15,6 +15,7 @@ import type {
   WorkflowHousekeepingAdapter,
   WorkflowLoopSelectionOutput,
 } from './workflow_loop_ports.js';
+import { deriveWorkflowLoopState } from './workflow_loop_derived_state.js';
 
 export type WorkflowLoopHousekeepingResult = {
   noWorkAlert: NoWorkAlertResult | null;
@@ -54,9 +55,13 @@ export async function runWorkflowLoopHousekeeping(params: {
   dryRun: boolean;
 }): Promise<WorkflowLoopHousekeepingResult> {
   const lifecycleBefore = captureActiveLifecycleState(params.map);
+  const derivedState = deriveWorkflowLoopState({
+    output: params.output,
+    map: params.map,
+  });
 
   const noWorkAlert = await maybeSendNoWorkFirstHitAlert({
-    output: params.output,
+    derivedState,
     previousMap: params.previousMap,
     map: params.map,
     dryRun: params.dryRun,
@@ -68,6 +73,7 @@ export async function runWorkflowLoopHousekeeping(params: {
       adapter: params.adapter,
       map: params.map,
       dryRun: params.dryRun,
+      activeTicketId: derivedState.activeTicketId,
     });
   } catch (err: any) {
     queuePositionUpdate = {
@@ -83,7 +89,7 @@ export async function runWorkflowLoopHousekeeping(params: {
   }
 
   const rocketChatStatusUpdate = await maybeUpdateRocketChatStatusFromWorkflowLoop({
-    output: params.output,
+    derivedState,
     previousMap: params.previousMap,
     map: params.map,
     dryRun: params.dryRun,

@@ -23,13 +23,14 @@ describe('rocketchat status formatting', () => {
 
     const out = await maybeUpdateRocketChatStatusFromWorkflowLoop({
       output: {
-        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98' },
+        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98', inProgressIds: ['a4a5f975-c2fb-4c6b-b6a6-152e13285e98'] },
         nextTicket: {
           item: {
             id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98',
             title: 'Clean up plane project states and remove this legacy mapping path',
           },
         },
+        dryRun: true,
       },
       previousMap: baseMap(),
       map,
@@ -52,13 +53,14 @@ describe('rocketchat status formatting', () => {
 
     const out = await maybeUpdateRocketChatStatusFromWorkflowLoop({
       output: {
-        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98' },
+        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98', inProgressIds: ['a4a5f975-c2fb-4c6b-b6a6-152e13285e98'] },
         nextTicket: {
           item: {
             id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98',
             title: 'Clean up plane project states and remove this legacy mapping path',
           },
         },
+        dryRun: true,
       },
       previousMap: baseMap(),
       map,
@@ -82,7 +84,7 @@ describe('rocketchat status formatting', () => {
 
     const out = await maybeUpdateRocketChatStatusFromWorkflowLoop({
       output: {
-        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98' },
+        tick: { kind: 'in_progress', id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98', inProgressIds: ['a4a5f975-c2fb-4c6b-b6a6-152e13285e98'] },
         nextTicket: {
           item: {
             id: 'a4a5f975-c2fb-4c6b-b6a6-152e13285e98',
@@ -90,6 +92,7 @@ describe('rocketchat status formatting', () => {
             title: 'Clean up plane project states and remove this legacy mapping path',
           },
         },
+        dryRun: true,
       },
       previousMap: baseMap(),
       map,

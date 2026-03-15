@@ -3,7 +3,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type { SessionMap } from '../automation/session_dispatcher.js';
-import { currentActiveSession } from './workflow_state.js';
+import type { WorkflowLoopDerivedState } from './workflow_loop_derived_state.js';
+import { deriveWorkflowLoopState } from './workflow_loop_derived_state.js';
+import type { WorkflowLoopSelectionOutput } from './workflow_loop_ports.js';
 
 export type RocketChatStatusUpdate = {
   outcome: 'updated' | 'skipped_disabled' | 'skipped_dry_run' | 'skipped_unchanged' | 'error';
@@ -136,54 +138,36 @@ async function setRocketChatStatus(params: { baseUrl: string; userId: string; au
   }
 }
 
-export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params: {
-  output: any;
-  previousMap: SessionMap;
-  map: SessionMap;
-  dryRun: boolean;
-}): Promise<RocketChatStatusUpdate | null> {
+export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params:
+  | {
+      derivedState: WorkflowLoopDerivedState;
+      previousMap: SessionMap;
+      map: SessionMap;
+      dryRun: boolean;
+    }
+  | {
+      output: WorkflowLoopSelectionOutput;
+      previousMap: SessionMap;
+      map: SessionMap;
+      dryRun: boolean;
+    }
+): Promise<RocketChatStatusUpdate | null> {
   const enabledRaw = cleanOneLine(process.env.KWF_ROCKETCHAT_STATUS_ENABLED ?? '1');
   const enabled = !['0', 'false', 'no', 'off'].includes(enabledRaw.toLowerCase());
   if (!enabled) return { outcome: 'skipped_disabled', detail: 'KWF_ROCKETCHAT_STATUS_ENABLED=false' };
 
-  const tick = params.output?.tick;
-  const tickKind = typeof tick?.kind === 'string' ? tick.kind : undefined;
-  const reasonCode = typeof tick?.reasonCode === 'string' ? tick.reasonCode : undefined;
-
-  const activeTicketId = typeof params.output?.nextTicket?.id === 'string'
-    ? params.output.nextTicket.id
-    : typeof params.output?.nextTicket?.item?.id === 'string'
-      ? params.output.nextTicket.item.id
-      : null;
-
-  const activeTitle = typeof params.output?.nextTicket?.title === 'string'
-    ? params.output.nextTicket.title
-    : typeof params.output?.nextTicket?.item?.title === 'string'
-      ? params.output.nextTicket.item.title
-      : undefined;
-  const activeIdentifier = typeof params.output?.nextTicket?.identifier === 'string'
-    ? params.output.nextTicket.identifier
-    : typeof params.output?.nextTicket?.item?.identifier === 'string'
-      ? params.output.nextTicket.item.identifier
-      : undefined;
-
-  const sessionLabel = activeTicketId ? params.map.sessionsByTicket?.[activeTicketId]?.sessionLabel : undefined;
-  const active = currentActiveSession(params.map);
-  let sessionId: string | undefined;
-  if (activeTicketId && active && active.ticketId === activeTicketId) {
-    sessionId = active.sessionId;
-  } else if (activeTicketId) {
-    sessionId = params.map.sessionsByTicket?.[activeTicketId]?.sessionId;
-  }
+  const derivedState = 'derivedState' in params
+    ? params.derivedState
+    : deriveWorkflowLoopState({ output: params.output, map: params.map });
 
   const desiredMessage = desiredMessageFromLoop({
-    activeTicketId,
-    activeTitle,
-    activeIdentifier,
-    tickKind,
-    reasonCode,
-    sessionLabel,
-    sessionId,
+    activeTicketId: derivedState.activeTicketId,
+    activeTitle: derivedState.activeTitle,
+    activeIdentifier: derivedState.activeIdentifier,
+    tickKind: derivedState.tickKind,
+    reasonCode: derivedState.reasonCode,
+    sessionLabel: derivedState.activeSessionLabel,
+    sessionId: derivedState.activeSessionId,
   });
 
   const prev = (params.previousMap as any)?.rocketChatStatus?.lastMessage;
