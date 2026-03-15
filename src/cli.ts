@@ -105,12 +105,20 @@ const WORKER_DELEGATION_DIR = '.tmp/kwf-worker-delegations';
 const DEFAULT_WORKER_SYNC_TIMEOUT_MS = 30_000;
 const DEFAULT_WORKER_BACKGROUND_TIMEOUT_MS = 15 * 60_000;
 
+function envBool(name: string, fallback = false): boolean {
+  const raw = String(process.env[name] ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  if (['1', 'true', 'yes', 'on'].includes(raw)) return true;
+  if (['0', 'false', 'no', 'off'].includes(raw)) return false;
+  return fallback;
+}
+
 function isBackgroundWorkerDelegationAllowed(agentId: string): boolean {
   // Background delegation produces a visible “No final worker response after …” notice.
   // That behavior is acceptable for the human-facing workflow-loop, but it is too noisy for
-  // per-ticket worker turns (it ends up as spammy comments on the work item).
+  // per-ticket worker turns unless explicitly enabled.
   if (agentId === WORKFLOW_LOOP_AGENT_ID) return true;
-  if (agentId === WORKER_AGENT_ID) return true;
+  if (agentId === WORKER_AGENT_ID) return envBool('KWF_WORKER_BACKGROUND_DELEGATION', false);
 
   // Default: disabled. (If we ever need it for other agents, add an explicit allowlist.)
   return false;
@@ -121,7 +129,10 @@ const WORKER_RUNTIME_OPTIONS: WorkerRuntimeOptions = {
   defaultSyncTimeoutMs: DEFAULT_WORKER_SYNC_TIMEOUT_MS,
   defaultBackgroundTimeoutMs: DEFAULT_WORKER_BACKGROUND_TIMEOUT_MS,
   isBackgroundDelegationAllowed: isBackgroundWorkerDelegationAllowed,
-  shouldStartInBackground: (agentId: string) => agentId === WORKER_AGENT_ID,
+  shouldStartInBackground: (agentId: string) => {
+    if (agentId !== WORKER_AGENT_ID) return false;
+    return envBool('KWF_WORKER_BACKGROUND_DELEGATION', false);
+  },
 };
 
 async function ensurePlaneEnvFromHelper(): Promise<void> {

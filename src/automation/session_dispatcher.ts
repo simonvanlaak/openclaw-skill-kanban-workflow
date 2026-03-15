@@ -90,6 +90,15 @@ type TicketContext = {
   }>;
 };
 
+const VERIFICATION_HARNESS_DIGEST = [
+  'VERIFICATION_HARNESS (mandatory before completed/in-review):',
+  '- First prove the issue/gap exists (red), then define the acceptance test, then implement, then rerun the test (green).',
+  '- Completed work must include concrete evidence, not "probably done" language.',
+  '- For non-technical work, acceptable evidence includes checklists, stable links, diffs, screenshots, stakeholder confirmations, and measurements.',
+  '- If verification cannot be performed, return decision="blocked" with the exact missing dependency.',
+  '- Optional reusable probes: /root/.openclaw/workspace/skills/kanban-workflow/scripts/verification_primitives.sh {http-status|file-exists|file-contains|diff-changed|metric-threshold} ...',
+].join('\n');
+
 const WORKER_POLICY_DIGEST = [
   'WORKER_POLICY_DIGEST (resume turn):',
   '- Execute at least one concrete step this turn unless truly blocked.',
@@ -99,6 +108,8 @@ const WORKER_POLICY_DIGEST = [
   '- Before implementation, scan potentialDuplicates and sanity-check for duplicates.',
   '- If unsure and clarification is needed, use decision="uncertain" with clarification_questions.',
   '- Keep output concise and evidence-backed; avoid boilerplate.',
+  '',
+  VERIFICATION_HARNESS_DIGEST,
 ].join('\n');
 
 export type WorkflowLoopPlan = {

@@ -2,9 +2,16 @@ import type { Adapter } from '../adapter.js';
 import type { WorkItem } from '../models.js';
 import type { ExternalLinkInput } from '../core/ports.js';
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import { z } from 'zod';
 
 import { Stage } from '../stage.js';
+
+const PLANE_CACHE_DIR = process.env.KWF_PLANE_CACHE_DIR?.trim() || '.tmp/kwf-plane-cache';
+const PLANE_CACHE_EVENT_FILE = process.env.KWF_PLANE_CACHE_EVENT_FILE?.trim() || '.tmp/kwf-plane-webhook-events.json';
+const PLANE_CACHE_RECONCILE_MS = Number.parseInt(process.env.KWF_PLANE_CACHE_RECONCILE_MS ?? '900000', 10);
 
 function parsePlaneDate(v: string): Date | undefined {
   const d = new Date(v);
@@ -21,6 +28,39 @@ function normalizePlaneIssuesList(raw: unknown): any[] {
     if (Array.isArray(r.data)) return r.data;
   }
   return [];
+}
+
+type PlaneIssueCache = {
+  version: 1;
+  projectId: string;
+  refreshedAt?: string;
+  updatedAt?: string;
+  issuesById: Record<string, any>;
+};
+
+type PlaneCacheEventQueue = {
+  version: 1;
+  events: Array<{ id: string; projectId?: string; seenAt?: string }>;
+};
+
+function issueCachePath(projectId: string): string {
+  return path.join(PLANE_CACHE_DIR, `${projectId}.json`);
+}
+
+function queueUniqueByIdAndProject(events: Array<{ id: string; projectId?: string; seenAt?: string }>): Array<{ id: string; projectId?: string; seenAt?: string }> {
+  const out = new Map<string, { id: string; projectId?: string; seenAt?: string }>();
+  for (const event of events) {
+    const id = String(event?.id ?? '').trim();
+    if (!id) continue;
+    const projectId = String(event?.projectId ?? '').trim() || undefined;
+    const key = `${projectId ?? '*'}:${id}`;
+    out.set(key, {
+      id,
+      projectId,
+      seenAt: event?.seenAt,
+    });
+  }
+  return [...out.values()];
 }
 
 function priorityValueFromUnknown(raw: unknown): number | undefined {
@@ -191,6 +231,28 @@ function extractIssueStageName(raw: unknown): string | undefined {
   return out.length > 0 ? out : undefined;
 }
 
+function extractIssueStateId(raw: unknown): string | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const issue: any = raw;
+
+  const direct = [
+    issue.state_id,
+    issue.stateId,
+    typeof issue.state === 'string' || typeof issue.state === 'number' ? issue.state : undefined,
+    issue.state?.id,
+    issue.state_detail?.id,
+    issue.stateDetail?.id,
+  ];
+
+  for (const candidate of direct) {
+    if (candidate == null) continue;
+    const out = String(candidate).trim();
+    if (out.length > 0) return out;
+  }
+
+  return undefined;
+}
+
 function extractIssueBody(raw: unknown): string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const issue: any = raw;
@@ -298,6 +360,147 @@ export class PlaneAdapter implements Adapter {
     return 'plane';
   }
 
+  private async writeJsonAtomic(filePath: string, value: unknown): Promise<void> {
+    const dir = path.dirname(filePath);
+    await fs.mkdir(dir, { recursive: true });
+    const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
+    await fs.rename(tempPath, filePath);
+  }
+
+  private async loadIssueCache(projectId: string): Promise<PlaneIssueCache | undefined> {
+    try {
+      const raw = await fs.readFile(issueCachePath(projectId), 'utf-8');
+      const parsed = JSON.parse(raw || '{}');
+      if (!parsed || typeof parsed !== 'object' || typeof parsed.projectId !== 'string' || typeof parsed.issuesById !== 'object') {
+        return undefined;
+      }
+      return {
+        version: 1,
+        projectId,
+        refreshedAt: typeof parsed.refreshedAt === 'string' ? parsed.refreshedAt : undefined,
+        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+        issuesById: { ...(parsed.issuesById ?? {}) },
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async saveIssueCache(projectId: string, issues: any[], opts?: { refreshedAt?: boolean }): Promise<PlaneIssueCache> {
+    const now = new Date().toISOString();
+    const cache: PlaneIssueCache = {
+      version: 1,
+      projectId,
+      refreshedAt: opts?.refreshedAt === false ? undefined : now,
+      updatedAt: now,
+      issuesById: Object.fromEntries(
+        normalizePlaneIssuesList(issues)
+          .filter((issue) => issue && issue.id != null)
+          .map((issue: any) => [String(issue.id), issue] as const),
+      ),
+    };
+    if (opts?.refreshedAt === false) {
+      const prior = await this.loadIssueCache(projectId);
+      cache.refreshedAt = prior?.refreshedAt;
+    }
+    await this.writeJsonAtomic(issueCachePath(projectId), cache);
+    return cache;
+  }
+
+  private async loadCacheEventQueue(): Promise<PlaneCacheEventQueue> {
+    try {
+      const raw = await fs.readFile(PLANE_CACHE_EVENT_FILE, 'utf-8');
+      const parsed = JSON.parse(raw || '{}');
+      const events = Array.isArray(parsed?.events)
+        ? parsed.events.map((event: any) => ({
+            id: String(event?.id ?? '').trim(),
+            projectId: String(event?.projectId ?? '').trim() || undefined,
+            seenAt: typeof event?.seenAt === 'string' ? event.seenAt : undefined,
+          }))
+        : [];
+      return { version: 1, events: queueUniqueByIdAndProject(events) };
+    } catch {
+      return { version: 1, events: [] };
+    }
+  }
+
+  private async consumeProjectCacheEvents(projectId: string): Promise<Array<{ id: string; projectId?: string; seenAt?: string }>> {
+    const queue = await this.loadCacheEventQueue();
+    if (queue.events.length === 0) return [];
+
+    const matched = queue.events.filter((event) => !event.projectId || event.projectId === projectId);
+    if (matched.length === 0) return [];
+
+    const remaining = queue.events.filter((event) => event.projectId && event.projectId !== projectId);
+    await this.writeJsonAtomic(PLANE_CACHE_EVENT_FILE, { version: 1, events: remaining });
+    return matched;
+  }
+
+  private async getIssueRawMaybe(projectId: string, id: string): Promise<any | undefined> {
+    try {
+      return await this.getIssueRaw(projectId, id);
+    } catch (err: any) {
+      const message = String(err?.message ?? err ?? '');
+      if (message.includes('HTTP 404') || message.includes('not found')) {
+        return undefined;
+      }
+      throw err;
+    }
+  }
+
+  private async applyIncrementalUpdates(projectId: string, cache: PlaneIssueCache, events: Array<{ id: string; projectId?: string; seenAt?: string }>): Promise<PlaneIssueCache> {
+    if (events.length === 0) return cache;
+
+    const issuesById = { ...(cache.issuesById ?? {}) };
+    let changed = false;
+
+    for (const event of queueUniqueByIdAndProject(events)) {
+      const issue = await this.getIssueRawMaybe(projectId, event.id);
+      if (issue && issue.id != null) {
+        issuesById[String(issue.id)] = issue;
+        changed = true;
+      } else if (issuesById[event.id] != null) {
+        delete issuesById[event.id];
+        changed = true;
+      }
+    }
+
+    if (!changed) return cache;
+
+    const next: PlaneIssueCache = {
+      version: 1,
+      projectId,
+      refreshedAt: cache.refreshedAt,
+      updatedAt: new Date().toISOString(),
+      issuesById,
+    };
+    await this.writeJsonAtomic(issueCachePath(projectId), next);
+    return next;
+  }
+
+  private async getSnapshotIssuesForProject(projectId: string): Promise<any[]> {
+    const now = Date.now();
+    const cached = await this.loadIssueCache(projectId);
+    const events = await this.consumeProjectCacheEvents(projectId);
+
+    let effectiveCache = cached;
+    if (effectiveCache && events.length > 0) {
+      effectiveCache = await this.applyIncrementalUpdates(projectId, effectiveCache, events);
+    }
+
+    const refreshedAtMs = effectiveCache?.refreshedAt ? Date.parse(effectiveCache.refreshedAt) : Number.NaN;
+    const stale = !effectiveCache || !Number.isFinite(refreshedAtMs) || (now - refreshedAtMs) >= PLANE_CACHE_RECONCILE_MS;
+    if (stale) {
+      const issuesRaw = await this.listIssuesRaw(projectId);
+      const issues = normalizePlaneIssuesList(issuesRaw);
+      await this.saveIssueCache(projectId, issues, { refreshedAt: true });
+      return issues;
+    }
+
+    return Object.values(effectiveCache?.issuesById ?? {});
+  }
+
   // ---- Verb-level (workflow) API (best-effort; depends on plane-cli surface) ----
 
   private async runJson(args: readonly string[]): Promise<any> {
@@ -375,7 +578,7 @@ export class PlaneAdapter implements Adapter {
   }
 
 
-  private async listCommentsViaApi(projectId: string, id: string): Promise<any[]> {
+  private async listCommentsViaApi(projectId: string, id: string, opts?: { limit?: number }): Promise<any[]> {
     const apiKey = process.env.PLANE_API_KEY;
     if (!apiKey) {
       throw new Error('PLANE_API_KEY is required for Plane comments API');
@@ -385,51 +588,81 @@ export class PlaneAdapter implements Adapter {
     const workItemBaseUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/work-items/${String(id)}/comments/`;
     const issueBaseUrl = `${base}/api/v1/workspaces/${this.workspaceSlug}/projects/${projectId}/issues/${String(id)}/comments/`;
 
-    const fetchPage = async (url: string): Promise<{ results: any[]; next?: string | null }> => {
-      const res = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'x-api-key': apiKey,
-        },
-      });
+    const sleep = async (ms: number): Promise<void> => {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    };
 
-      if (!res.ok) {
+    const fetchPage = async (url: string): Promise<{ results: any[]; next?: string | null }> => {
+      let attempt = 0;
+      while (true) {
+        attempt += 1;
+        const res = await fetch(url, {
+          method: 'GET',
+          headers: {
+            'x-api-key': apiKey,
+          },
+        });
+
+        if (res.ok) {
+          const json = await res.json().catch(() => ({}));
+          if (Array.isArray(json)) return { results: json, next: null };
+
+          if (json && typeof json === 'object') {
+            const obj: any = json;
+            const results = Array.isArray(obj.results) ? obj.results : [];
+            const next = typeof obj.next === 'string' ? obj.next : null;
+            return { results, next };
+          }
+
+          return { results: [], next: null };
+        }
+
         const txt = await res.text().catch(() => '');
+        if (res.status === 429 && attempt < 4) {
+          const retryAfterRaw = res.headers.get('retry-after');
+          const retryAfterSeconds = Number(retryAfterRaw);
+          const backoffMs = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : attempt * 1500;
+          await sleep(backoffMs);
+          continue;
+        }
+
         throw new Error(`Plane comments API failed: HTTP ${res.status} ${txt}`);
       }
-
-      const json = await res.json().catch(() => ({}));
-      if (Array.isArray(json)) return { results: json, next: null };
-
-      if (json && typeof json === 'object') {
-        const obj: any = json;
-        const results = Array.isArray(obj.results) ? obj.results : [];
-        const next = typeof obj.next === 'string' ? obj.next : null;
-        return { results, next };
-      }
-
-      return { results: [], next: null };
     };
 
     const fetchAll = async (baseUrl: string): Promise<any[]> => {
       const out: any[] = [];
-      let nextUrl: string | null = baseUrl;
+      const requestedLimit = Math.max(1, Number(opts?.limit ?? 100));
+      const pageSize = Math.min(requestedLimit, 100);
+      let nextUrl: string | null = (() => {
+        try {
+          const u = new URL(baseUrl);
+          u.searchParams.set('page_size', String(pageSize));
+          return u.toString();
+        } catch {
+          return baseUrl;
+        }
+      })();
       let pageCount = 0;
 
-      while (nextUrl && pageCount < 50) {
+      while (nextUrl && pageCount < 50 && out.length < requestedLimit) {
         pageCount += 1;
         const { results, next } = await fetchPage(nextUrl);
         out.push(...results);
-        if (!next) break;
+        if (!next || out.length >= requestedLimit) break;
         try {
-          nextUrl = new URL(next, baseUrl).toString();
+          const u = new URL(next, baseUrl);
+          if (!u.searchParams.get('page_size')) u.searchParams.set('page_size', String(pageSize));
+          nextUrl = u.toString();
         } catch {
           // If Plane ever returns a malformed next link, stop paginating.
           break;
         }
       }
 
-      return out;
+      return out.slice(0, requestedLimit);
     };
 
     // Try work-items endpoint first.
@@ -918,6 +1151,28 @@ export class PlaneAdapter implements Adapter {
     return match.id;
   }
 
+  private async resolveCanonicalStageForIssueRaw(
+    projectId: string,
+    issueRaw: unknown,
+  ): Promise<import('../stage.js').StageKey | undefined> {
+    let stateName = extractIssueStageName(issueRaw);
+
+    if (!stateName) {
+      const stateId = extractIssueStateId(issueRaw);
+      if (stateId) {
+        const states = await this.fetchStatesForProject(projectId);
+        stateName = states.find((s) => s.id === stateId)?.name;
+      }
+    }
+
+    if (!stateName) return undefined;
+
+    const mapped = this.stageMap[stateName];
+    if (!mapped) return undefined;
+
+    return Stage.fromAny(mapped).key;
+  }
+
   async whoami(): Promise<{ id?: string; username?: string; name?: string }> {
     const parsed = (await this.runJson(['me'])) ?? {};
 
@@ -946,8 +1201,7 @@ export class PlaneAdapter implements Adapter {
     const merged: Array<{ id: string; updatedAt?: Date; assignees?: Array<{ id?: string; username?: string; name?: string } | string> }> = [];
 
     for (const projectId of this.projectIds) {
-      const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: meId });
-      const issues = normalizePlaneIssuesList(issuesRaw);
+      const issues = await this.getSnapshotIssuesForProject(projectId);
       const snap = await this.fetchSnapshotForProject(projectId, issues);
 
       let items = [...snap.values()].filter((i) => i.stage.key === stage);
@@ -961,6 +1215,25 @@ export class PlaneAdapter implements Adapter {
       }
 
       for (const item of items) {
+        // Defensive live-stage verification: snapshot cache can lag behind manual
+        // stage moves (e.g. In Progress -> Blocked), causing stale active-session drift.
+        // When we are selecting active in-progress work, verify each candidate against
+        // a fresh issue read before returning it.
+        if (stage === 'stage:in-progress') {
+          try {
+            const issueRaw = await this.getIssueRawMaybe(projectId, item.id);
+            if (issueRaw) {
+              const canonicalStage = await this.resolveCanonicalStageForIssueRaw(projectId, issueRaw);
+              const hasLiveStateSignal = Boolean(extractIssueStageName(issueRaw) || extractIssueStateId(issueRaw));
+              if (hasLiveStateSignal && canonicalStage !== stage) {
+                continue;
+              }
+            }
+          } catch {
+            // Best-effort safety check only; never fail selection due transient read issues.
+          }
+        }
+
         merged.push({ id: item.id, updatedAt: item.updatedAt, assignees: item.assignees });
       }
     }
@@ -1031,8 +1304,7 @@ export class PlaneAdapter implements Adapter {
     const merged: Array<{ id: string; title: string; priority: number }> = [];
 
     for (const projectId of this.projectIds) {
-      const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: meId });
-      const issues = normalizePlaneIssuesList(issuesRaw);
+      const issues = await this.getSnapshotIssuesForProject(projectId);
 
       const snap = await this.fetchSnapshotForProject(projectId, issues);
       let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:todo');
@@ -1134,7 +1406,7 @@ export class PlaneAdapter implements Adapter {
     opts: { limit?: number; newestFirst: boolean; includeInternal: boolean },
   ): Promise<Array<{ id: string; body: string; createdAt?: Date; author?: { id?: string; username?: string; name?: string } }>> {
     const projectId = await this.resolveProjectIdForIssue(id, 'listComments');
-    const raw = await this.listCommentsViaApi(projectId, id);
+    const raw = await this.listCommentsViaApi(projectId, id, { limit: opts.limit });
 
     const mapped = raw
       .map((c: any) => {
@@ -1436,7 +1708,8 @@ export class PlaneAdapter implements Adapter {
     const merged = new Map<string, WorkItem>();
 
     for (const projectId of this.projectIds) {
-      const snap = await this.fetchSnapshotForProject(projectId);
+      const issues = await this.getSnapshotIssuesForProject(projectId);
+      const snap = await this.fetchSnapshotForProject(projectId, issues);
       for (const [id, item] of snap.entries()) {
         merged.set(id, item);
       }

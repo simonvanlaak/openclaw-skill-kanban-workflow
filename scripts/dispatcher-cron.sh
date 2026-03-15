@@ -15,7 +15,8 @@ source /root/.openclaw/workspace/scripts/plane_env.sh
 # Optional, safe anti-throttle defaults.
 : "${KWF_CODEX_DAY_USAGE_BLOCK_PERCENT:=95}"
 : "${KWF_CODEX_5H_USAGE_BLOCK_PERCENT:=99}"
-: "${KWF_WORKER_BACKGROUND_DELEGATION:=false}"
+: "${KWF_WORKER_BACKGROUND_DELEGATION:=true}"
+export KWF_WORKER_BACKGROUND_DELEGATION
 
 # Disable noisy "no actionable ticket" alerts by default.
 # If you ever want them back, set KWF_NO_WORK_ALERT_TARGET to a Rocket.Chat username (e.g. "@simon.vanlaak").

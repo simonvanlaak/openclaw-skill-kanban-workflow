@@ -50,30 +50,52 @@ function parseRelayedAuthorNameFromBody(body?: string): string | undefined {
   return name ? name : undefined;
 }
 
+function isAuthoredByWorker(
+  comment: { author?: { id?: string; username?: string; name?: string } } | undefined,
+  meKeys: Set<string>,
+): boolean {
+  if (!comment) return false;
+  const authorKeys = normalizeActorKeys(comment.author);
+  if (authorKeys.size === 0) return false;
+  for (const key of authorKeys) {
+    if (meKeys.has(key)) return true;
+  }
+  return false;
+}
+
+function isWorkerDecisionBoundary(
+  comment: { body?: string; author?: { id?: string; username?: string; name?: string } } | undefined,
+  meKeys: Set<string>,
+): boolean {
+  if (!comment) return false;
+  if (!isAuthoredByWorker(comment, meKeys)) return false;
+  const body = String(comment.body ?? '').toLowerCase();
+  if (!body) return false;
+  return (
+    body.includes('worker decision:') ||
+    body.includes('moving this ticket to blocked') ||
+    body.includes('human action requested: provide clarification and rerun workflow-loop')
+  );
+}
+
 function isHumanRelativeToWorker(
   comment: { body?: string; author?: { id?: string; username?: string; name?: string } } | undefined,
   meKeys: Set<string>,
 ): boolean {
   if (!comment) return false;
 
-  const authorKeys = normalizeActorKeys(comment.author);
   const relayedAuthor = parseRelayedAuthorNameFromBody(comment.body);
   const relayedIsHuman = relayedAuthor ? !meKeys.has(relayedAuthor.toLowerCase()) : false;
 
-  if (authorKeys.size > 0) {
-    let authoredByWorker = false;
-    for (const key of authorKeys) {
-      if (meKeys.has(key)) {
-        authoredByWorker = true;
-        break;
-      }
-    }
-
-    // Normal path: platform exposes distinct human actor ids/usernames.
-    if (!authoredByWorker) return true;
-
+  if (isAuthoredByWorker(comment, meKeys)) {
     // Bridge/import path: worker account relays a human message in comment body.
     return relayedIsHuman;
+  }
+
+  const authorKeys = normalizeActorKeys(comment.author);
+  if (authorKeys.size > 0) {
+    // Normal path: platform exposes distinct human actor ids/usernames.
+    return true;
   }
 
   return relayedIsHuman;
@@ -134,6 +156,11 @@ export async function runAutoReopenOnHumanComment(opts: {
         if (seenCommentId && c.id === seenCommentId) break;
         if (isHumanRelativeToWorker(c, meKeys)) {
           trigger = { id: c.id };
+          break;
+        }
+        if (isWorkerDecisionBoundary(c, meKeys)) {
+          // A fresh worker decision marks the latest completed loop for this ticket.
+          // Older human comments should not trigger another reopen for the same cycle.
           break;
         }
       }

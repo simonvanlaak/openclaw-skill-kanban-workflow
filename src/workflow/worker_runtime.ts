@@ -8,6 +8,10 @@ import { parseWorkerOutputFromAgentCall } from './agent_io.js';
 
 type WorkerRouting = { sessionKey?: string; sessionId?: string; agentSessionId?: string };
 
+const WORKER_HISTORY_LIMIT = 100;
+const DEFAULT_WORKER_SEND_MAX_ATTEMPTS = 4;
+const DEFAULT_WORKER_SEND_RETRY_DELAY_MS = 5_000;
+
 export type DispatchWorkerTurnResult =
   | {
       kind: 'immediate';
@@ -133,6 +137,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function resolveWorkerSendMaxAttempts(): number {
+  return resolvePositiveInt(process.env.KWF_WORKER_SEND_MAX_ATTEMPTS, DEFAULT_WORKER_SEND_MAX_ATTEMPTS);
+}
+
+function resolveWorkerSendRetryDelayMs(): number {
+  return resolvePositiveInt(process.env.KWF_WORKER_SEND_RETRY_DELAY_MS, DEFAULT_WORKER_SEND_RETRY_DELAY_MS);
+}
+
+function isTransientGatewayDispatchErr(err: unknown): boolean {
+  const text = collectErrText(err).toLowerCase();
+  return [
+    'gateway closed',
+    'gateway connect failed',
+    'closed before connect',
+    'handshake timeout',
+    'handshake-timeout',
+    'econnrefused',
+    'socket hang up',
+    'normal closure',
+  ].some((needle) => text.includes(needle));
+}
+
 function extractTextContent(content: unknown): string[] {
   if (!Array.isArray(content)) return [];
   return content
@@ -143,26 +169,111 @@ function extractTextContent(content: unknown): string[] {
     .filter((text) => text.length > 0);
 }
 
-function extractLatestAssistantTextSince(history: unknown, sinceTimestamp: number): { text: string; timestamp: number; sessionId?: string } | null {
+function parseAgentIdFromSessionKey(sessionKey: string): string | null {
+  const match = /^agent:([^:]+):/.exec(sessionKey.trim());
+  return match?.[1] ?? null;
+}
+
+function resolveOpenClawRoot(): string {
+  const configured = (process.env.OPENCLAW_HOME ?? '').trim();
+  if (configured) return configured;
+  return path.join(process.env.HOME || '/root', '.openclaw');
+}
+
+async function readLocalSessionHistory(sessionKey: string): Promise<unknown | null> {
+  const agentId = parseAgentIdFromSessionKey(sessionKey);
+  if (!agentId) return null;
+
+  const sessionsDir = path.join(resolveOpenClawRoot(), 'agents', agentId, 'sessions');
+  const sessionsIndexPath = path.join(sessionsDir, 'sessions.json');
+
+  let sessionFile: string | null = null;
+  try {
+    const raw = await fs.readFile(sessionsIndexPath, 'utf8');
+    const index = JSON.parse(raw) as Record<string, { sessionId?: string; sessionFile?: string }>;
+    const entry = index[sessionKey];
+    if (!entry || typeof entry !== 'object') return null;
+    if (typeof entry.sessionFile === 'string' && entry.sessionFile.trim().length > 0) {
+      sessionFile = entry.sessionFile;
+    } else if (typeof entry.sessionId === 'string' && entry.sessionId.trim().length > 0) {
+      sessionFile = path.join(sessionsDir, `${entry.sessionId}.jsonl`);
+    }
+  } catch {
+    return null;
+  }
+
+  if (!sessionFile) return null;
+
+  let rawLines = '';
+  try {
+    rawLines = await fs.readFile(sessionFile, 'utf8');
+  } catch {
+    return null;
+  }
+
+  const messages: Array<Record<string, unknown>> = [];
+  for (const line of rawLines.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let row: Record<string, unknown>;
+    try {
+      row = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (String(row.type ?? '').toLowerCase() !== 'message') continue;
+    const message = row.message;
+    if (!message || typeof message !== 'object') continue;
+    const timestamp = Date.parse(String(row.timestamp ?? ''));
+    messages.push({
+      ...(message as Record<string, unknown>),
+      timestamp: Number.isFinite(timestamp) ? timestamp : undefined,
+    });
+  }
+
+  if (!messages.length) return null;
+
+  return {
+    sessionKey,
+    sessionId: path.basename(sessionFile, '.jsonl'),
+    messages,
+  };
+}
+
+export async function extractCompletedAssistantReplyFromLocalSessionSince(
+  sessionKey: string,
+  sinceTimestamp: number,
+): Promise<{ text: string; timestamp: number; sessionId?: string } | null> {
+  const history = await readLocalSessionHistory(sessionKey);
+  return extractCompletedAssistantReplySince(history, sinceTimestamp);
+}
+
+export function extractCompletedAssistantReplySince(history: unknown, sinceTimestamp: number): { text: string; timestamp: number; sessionId?: string } | null {
   if (!history || typeof history !== 'object') return null;
   const payload = history as Record<string, unknown>;
   const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined;
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
 
-  let latest: { text: string; timestamp: number; sessionId?: string } | null = null;
-  for (const message of messages) {
-    if (!message || typeof message !== 'object') continue;
-    const row = message as Record<string, unknown>;
-    if (String(row.role ?? '').toLowerCase() !== 'assistant') continue;
-    const timestamp = Number(row.timestamp);
-    if (!Number.isFinite(timestamp) || timestamp <= sinceTimestamp) continue;
-    const text = extractTextContent(row.content).join('\n').trim();
-    if (!text) continue;
-    if (!latest || timestamp > latest.timestamp) {
-      latest = { text, timestamp, sessionId };
-    }
-  }
-  return latest;
+  const messages = rawMessages
+    .map((message) => (message && typeof message === 'object' ? (message as Record<string, unknown>) : null))
+    .filter((message): message is Record<string, unknown> => !!message)
+    .map((row) => ({ row, timestamp: Number(row.timestamp) }))
+    .filter((entry) => Number.isFinite(entry.timestamp) && entry.timestamp > sinceTimestamp)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  const last = messages.at(-1)?.row;
+  if (!last) return null;
+  if (String(last.role ?? '').toLowerCase() !== 'assistant') return null;
+  if (String(last.stopReason ?? '').toLowerCase() === 'tooluse') return null;
+
+  const text = extractTextContent(last.content).join('\n').trim();
+  if (!text) return null;
+
+  return {
+    text,
+    timestamp: Number(last.timestamp),
+    sessionId,
+  };
 }
 
 async function gatewayCall(method: string, params: Record<string, unknown>, timeoutMs = 15_000): Promise<unknown> {
@@ -182,6 +293,44 @@ async function gatewayCall(method: string, params: Record<string, unknown>, time
   return JSON.parse(raw);
 }
 
+async function gatewayCallWithRetry(params: {
+  method: string;
+  rpcParams: Record<string, unknown>;
+  timeoutMs?: number;
+  maxAttempts?: number;
+  retryDelayMs?: number;
+  shouldRetry?: (err: unknown) => boolean;
+}): Promise<unknown> {
+  const maxAttempts = Math.max(1, params.maxAttempts ?? 1);
+  const retryDelayMs = Math.max(0, params.retryDelayMs ?? 0);
+  const shouldRetry = params.shouldRetry ?? (() => false);
+
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await gatewayCall(params.method, params.rpcParams, params.timeoutMs);
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= maxAttempts || !shouldRetry(err)) {
+        throw err;
+      }
+      await sleep(retryDelayMs * attempt);
+    }
+  }
+
+  throw lastErr ?? new Error(`gatewayCallWithRetry exhausted without error for ${params.method}`);
+}
+
+export async function extractCompletedAssistantReplyWithLocalFallback(params: {
+  history: unknown;
+  sessionKey: string;
+  sinceTimestamp: number;
+}): Promise<{ text: string; timestamp: number; sessionId?: string } | null> {
+  const latest = extractCompletedAssistantReplySince(params.history, params.sinceTimestamp);
+  if (latest) return latest;
+  return extractCompletedAssistantReplyFromLocalSessionSince(params.sessionKey, params.sinceTimestamp);
+}
+
 async function pollWorkerReply(params: {
   sessionKey: string;
   sinceTimestamp: number;
@@ -189,11 +338,22 @@ async function pollWorkerReply(params: {
 }): Promise<{ workerOutput: string; raw: string; routing: WorkerRouting } | null> {
   const deadline = Date.now() + params.timeoutMs;
   while (Date.now() < deadline) {
-    const history = await gatewayCall('chat.history', {
+    let history: unknown = null;
+    let historyErr: unknown = null;
+    try {
+      history = await gatewayCall('chat.history', {
+        sessionKey: params.sessionKey,
+        limit: WORKER_HISTORY_LIMIT,
+      });
+    } catch (err) {
+      historyErr = err;
+    }
+
+    const latest = await extractCompletedAssistantReplyWithLocalFallback({
+      history,
       sessionKey: params.sessionKey,
-      limit: 20,
+      sinceTimestamp: params.sinceTimestamp,
     });
-    const latest = extractLatestAssistantTextSince(history, params.sinceTimestamp);
     if (latest) {
       return {
         workerOutput: latest.text,
@@ -204,6 +364,7 @@ async function pollWorkerReply(params: {
         },
       };
     }
+
     await sleep(1200);
   }
   return null;
@@ -290,8 +451,34 @@ async function startWorkerDelegation(
     'idem=$(python3 - <<"PY"\nimport uuid\nprint(uuid.uuid4())\nPY\n)',
     `msg=$(cat ${shellQuote(paths.messagePath)})`,
     `send_params=$(jq -cn --arg sessionKey "$session_key" --arg message "$msg" --arg idempotencyKey "$idem" '{sessionKey:$sessionKey,message:$message,idempotencyKey:$idempotencyKey}')`,
-    // Fire-and-forget dispatch
-    `openclaw gateway call chat.send --token "$gateway_token" --timeout 15000 --json --params "$send_params" >/dev/null 2>> ${shellQuote(paths.stderrPath)}`,
+    `max_send_attempts=${resolveWorkerSendMaxAttempts()}`,
+    `send_retry_delay_ms=${resolveWorkerSendRetryDelayMs()}`,
+    // Fire-and-forget dispatch. Only start polling if the worker turn was actually queued.
+    'send_rc=1',
+    'send_attempt=1',
+    'while [ "$send_attempt" -le "$max_send_attempts" ]; do',
+    `  openclaw gateway call chat.send --token "$gateway_token" --timeout 15000 --json --params "$send_params" >/dev/null 2>> ${shellQuote(paths.stderrPath)}`,
+    '  send_rc=$?',
+    '  if [ "$send_rc" -eq 0 ]; then',
+    '    break',
+    '  fi',
+    '  if [ "$send_attempt" -ge "$max_send_attempts" ]; then',
+    '    break',
+    '  fi',
+    `  sleep_secs=$(python3 - <<PY
+attempt = int("$send_attempt")
+delay_ms = int("$send_retry_delay_ms")
+print(f"{(attempt * delay_ms) / 1000:.3f}")
+PY
+)`,
+    '  sleep "$sleep_secs"',
+    '  send_attempt=$((send_attempt + 1))',
+    'done',
+    'if [ "$send_rc" -ne 0 ]; then',
+    `  printf "%s\n" "$send_rc" > ${shellQuote(paths.exitCodePath)}`,
+    `  touch ${shellQuote(paths.donePath)}`,
+    '  exit 0',
+    'fi',
     // Poll for the latest assistant text after since_ts.
     `deadline=$(( since_ts + ${Math.floor(backgroundTimeoutMs)} ))`,
     'while true; do',
@@ -299,10 +486,12 @@ async function startWorkerDelegation(
     '  if [ "$now" -ge "$deadline" ]; then',
     '    break',
     '  fi',
-    `  hist_params=$(jq -cn --arg sessionKey "$session_key" '{sessionKey:$sessionKey,limit:20}')`,
+    `  hist_params=$(jq -cn --arg sessionKey "$session_key" --argjson limit ${WORKER_HISTORY_LIMIT} '{sessionKey:$sessionKey,limit:$limit}')`,
     `  hist=$(openclaw gateway call chat.history --token "$gateway_token" --timeout 15000 --json --params "$hist_params" 2>> ${shellQuote(paths.stderrPath)} || true)`,
-    // Mirror extractLatestAssistantTextSince(): role=assistant, content[].type=text
-    `  text=$(printf "%s" "$hist" | jq -r --argjson since "$since_ts" '[.messages[] | select(.role=="assistant" and (.timestamp|tonumber) > $since) | ([.content[]? | select((.type|ascii_downcase)=="text") | (.text // "") | select(length>0)] | join("\\n") ) | select(length>0)] | last // empty')`,
+    // Mirror extractCompletedAssistantReplySince(): only accept a terminal assistant text reply,
+    // not an earlier progress note that is followed by toolUse/toolResult events.
+    `  text=$(printf "%s" "$hist" | jq -r --argjson since "$since_ts" '([.messages[]? | select((.timestamp|tonumber) > $since)] | sort_by(.timestamp|tonumber) | last) as $last | if ($last | type) != "object" then empty elif ($last.role // "" | ascii_downcase) != "assistant" then empty elif ($last.stopReason // "" | ascii_downcase) == "tooluse" then empty else ([ $last.content[]? | select((.type // "" | ascii_downcase)=="text") | (.text // "") | select(length>0)] | join("\\n")) end')`,
+    `  if [ -z "$text" ]; then\n    text=$(SESSION_KEY="$session_key" SINCE_TS="$since_ts" python3 - <<'PY'\nimport json\nimport os\nfrom pathlib import Path\n\nsession_key = os.environ.get('SESSION_KEY', '').strip()\nsince_raw = os.environ.get('SINCE_TS', '').strip()\ntry:\n    since_ts = int(since_raw)\nexcept Exception:\n    raise SystemExit(0)\n\nparts = session_key.split(':', 2)\nif len(parts) < 3 or parts[0] != 'agent' or not parts[1]:\n    raise SystemExit(0)\nagent_id = parts[1]\nroot = os.environ.get('OPENCLAW_HOME', '').strip() or str(Path.home() / '.openclaw')\nsessions_dir = Path(root) / 'agents' / agent_id / 'sessions'\nsessions_index_path = sessions_dir / 'sessions.json'\ntry:\n    index = json.loads(sessions_index_path.read_text())\n    entry = index.get(session_key) or {}\nexcept Exception:\n    raise SystemExit(0)\nsession_file = entry.get('sessionFile')\nif not session_file and entry.get('sessionId'):\n    session_file = str(sessions_dir / f"{entry['sessionId']}.jsonl")\nif not session_file:\n    raise SystemExit(0)\npath = Path(session_file)\ntry:\n    lines = path.read_text().splitlines()\nexcept Exception:\n    raise SystemExit(0)\nmessages = []\nfor line in lines:\n    line = line.strip()\n    if not line:\n        continue\n    try:\n        row = json.loads(line)\n    except Exception:\n        continue\n    if str(row.get('type', '')).lower() != 'message':\n        continue\n    message = row.get('message')\n    if not isinstance(message, dict):\n        continue\n    try:\n        ts = int(__import__('datetime').datetime.fromisoformat(str(row.get('timestamp', '')).replace('Z', '+00:00')).timestamp() * 1000)\n    except Exception:\n        continue\n    if ts <= since_ts:\n        continue\n    messages.append((ts, message))\nif not messages:\n    raise SystemExit(0)\nmessages.sort(key=lambda item: item[0])\n_, last = messages[-1]\nif str(last.get('role', '')).lower() != 'assistant':\n    raise SystemExit(0)\nif str(last.get('stopReason', '')).lower() == 'tooluse':\n    raise SystemExit(0)\ntexts = []\nfor entry in last.get('content') or []:\n    if isinstance(entry, dict) and str(entry.get('type', '')).lower() == 'text':\n        text = str(entry.get('text', '')).strip()\n        if text:\n            texts.append(text)\nif texts:\n    print('\\n'.join(texts), end='')\nPY\n)\n  fi`,
     '  if [ -n "$text" ]; then',
     `    printf "%s" "$text" > ${shellQuote(paths.resultPath)}`,
     `    printf "0\\n" > ${shellQuote(paths.exitCodePath)}`,
@@ -363,10 +552,17 @@ export async function loadWorkerDelegationState(
     return { kind: 'running', meta };
   }
 
+  const exitCodeRaw = await fs.readFile(paths.exitCodePath, 'utf8').catch(() => '');
+  const exitCode = Number.parseInt(exitCodeRaw.trim(), 10);
   const stdoutRaw = await fs.readFile(paths.resultPath, 'utf8').catch(() => '');
   const stderrRaw = await fs.readFile(paths.stderrPath, 'utf8').catch(() => '');
-  const parsed = parseWorkerOutputFromAgentCall(stdoutRaw, stderrRaw);
   await clearWorkerDelegation(opts.delegationDir, sessionId);
+
+  if (Number.isFinite(exitCode) && exitCode !== 0 && !stdoutRaw.trim()) {
+    return { kind: 'none' };
+  }
+
+  const parsed = parseWorkerOutputFromAgentCall(stdoutRaw, stderrRaw);
 
   if (!parsed.ok) {
     throw new Error(`Background worker turn failed for ticket ${ticketId}: ${parsed.error ?? 'unknown error'}`);
@@ -434,11 +630,18 @@ export async function dispatchWorkerTurn(
   const dispatchStartTs = Date.now();
 
   try {
-    await gatewayCall('chat.send', {
-      sessionKey,
-      message,
-      idempotencyKey: randomUUID(),
-    }, Math.max(syncTimeoutMs, 15_000));
+    await gatewayCallWithRetry({
+      method: 'chat.send',
+      rpcParams: {
+        sessionKey,
+        message,
+        idempotencyKey: randomUUID(),
+      },
+      timeoutMs: Math.max(syncTimeoutMs, 15_000),
+      maxAttempts: resolveWorkerSendMaxAttempts(),
+      retryDelayMs: resolveWorkerSendRetryDelayMs(),
+      shouldRetry: isTransientGatewayDispatchErr,
+    });
 
     const reply = await pollWorkerReply({
       sessionKey,

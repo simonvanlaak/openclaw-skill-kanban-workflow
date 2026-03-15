@@ -110,4 +110,39 @@ describe('auto-reopen on human comment', () => {
 
     await fs.rm(path, { force: true });
   });
+
+  test('does not reopen on stale human comment once a newer worker decision exists', async () => {
+    const path = cursorPath('kwf-auto-reopen-stale-human-after-worker-decision');
+    await fs.writeFile(path, JSON.stringify({ version: 1, seenByTicket: { 'BL-7': 'seen-old' } }), 'utf8');
+
+    const adapter = {
+      whoami: vi.fn(async () => ({ id: 'bot-1', username: 'kwf-bot', name: 'Jules Mercer' })),
+      listIdsByStage: vi.fn(async (stage: string) => (stage === 'stage:blocked' ? ['BL-7'] : [])),
+      listComments: vi.fn(async () => [
+        {
+          id: 'c-worker-decision-new',
+          body: 'Worker decision: blocked\n\nCompleted steps:\n1. Checked logs',
+          author: { id: 'bot-1', username: 'kwf-bot', name: 'Jules Mercer' },
+        },
+        {
+          id: 'c-human-older',
+          body: 'Any update?',
+          author: { id: 'human-1', username: 'alice' },
+        },
+        {
+          id: 'seen-old',
+          body: 'older cursor marker',
+          author: { id: 'bot-1', username: 'kwf-bot' },
+        },
+      ]),
+      setStage: vi.fn(async () => undefined),
+    };
+
+    const res = await runAutoReopenOnHumanComment({ adapter, cursorPath: path });
+
+    expect(res.actions).toEqual([]);
+    expect(adapter.setStage).not.toHaveBeenCalled();
+
+    await fs.rm(path, { force: true });
+  });
 });

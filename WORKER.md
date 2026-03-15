@@ -75,6 +75,51 @@ Fallback only:
 - If Nextcloud upload/sharing fails, post a Plane comment with the reason and the best available stable location.
 - Only attach a local file to Plane if explicitly requested or if there is no viable Nextcloud option.
 
+## 3.2) Verification harness (mandatory before Completed / In Review)
+
+Treat verification like a lightweight TDD loop, even for non-engineering work:
+
+1. **Reproduce / verify the issue exists (red).**
+   - Show the current failure, gap, or missing artifact.
+   - Examples: failing command, missing file/link, screenshot of wrong UI state, checklist item still open, stakeholder waiting on input.
+2. **Define the acceptance test.**
+   - Write the exact condition that will count as done.
+   - It must be rerunnable or inspectable by someone else.
+3. **Implement the change.**
+4. **Rerun verification (green).**
+   - Re-execute the command/check/probe or inspect the final artifact.
+5. **Attach evidence.**
+   - Evidence must be test-shaped, not just "looks good".
+   - Prefer concrete artifacts: command output, links, screenshots, diffs, checklist completion, measurements, stakeholder confirmation.
+6. **Cleanup / refactor.**
+   - Remove temporary probes, note any follow-up debt, and leave the workspace tidy.
+
+### Non-technical tasks still need acceptance tests
+
+For PM / product / ops / research work, use evidence that another human can inspect quickly:
+- checklist with completed criteria,
+- stable document or ticket links,
+- before/after diffs,
+- screenshots or snapshots,
+- explicit stakeholder confirmation,
+- measurements / counts / timestamps.
+
+### If verification is not possible
+
+Do **not** mark work as probably done.
+Return `decision="blocked"` with the exact missing dependency.
+Examples: missing credential, missing environment access, stakeholder confirmation not yet received, baseline metric unavailable, browser/UI inaccessible.
+
+### Reusable local verification helpers
+
+Use small deterministic probes where possible:
+```bash
+/root/.openclaw/workspace/skills/kanban-workflow/scripts/verification_primitives.sh http-status https://example.com 200
+/root/.openclaw/workspace/skills/kanban-workflow/scripts/verification_primitives.sh file-contains ./report.md "Acceptance criteria met"
+/root/.openclaw/workspace/skills/kanban-workflow/scripts/verification_primitives.sh diff-changed before.txt after.txt
+/root/.openclaw/workspace/skills/kanban-workflow/scripts/verification_primitives.sh metric-threshold p95_ms 183 le 200
+```
+
 ## 4) Secrets + infrastructure rules
 
 - Credentials are stored in 1Password (`op://...`), not in repo files.

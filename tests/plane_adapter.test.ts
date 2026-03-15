@@ -117,6 +117,58 @@ describe('PlaneAdapter', () => {
     expect(snap.get('i3')?.stage.toString()).toBe('stage:in-progress');
   });
 
+  it('filters stale cached in-progress candidates when live issue state is blocked', async () => {
+    const projectId = `proj-stale-filter-${Date.now()}`;
+
+    (execa as any as ExecaMock)
+      // whoami
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ id: 'me-1', email: 'me@example.com', display_name: 'Me' }),
+      })
+      // whoami sanity check projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // snapshot list (stale: still In Progress)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            id: 'i-stale',
+            name: 'Stale active',
+            state: { name: 'In Progress' },
+            assignees: [{ id: 'me-1' }],
+          },
+        ]),
+      })
+      // live issue read (fresh: moved to Blocked, state exposed as UUID)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ id: 'i-stale', state: 'state-blocked-1' }),
+      })
+      // states lookup to map UUID -> canonical stage
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            { id: 'state-in-progress-1', name: 'In Progress' },
+            { id: 'state-blocked-1', name: 'Blocked' },
+          ],
+        }),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId,
+      stageMap: {
+        Blocked: 'stage:blocked',
+        'In Progress': 'stage:in-progress',
+      },
+    });
+
+    const ids = await adapter.listIdsByStage('stage:in-progress');
+
+    expect(ids).toEqual([]);
+    const calls = (execa as any).mock.calls.map((c: any) => c[1]);
+    expect(calls).toContainEqual(['-f', 'json', 'issues', 'get', '-p', projectId, 'i-stale']);
+    expect(calls).toContainEqual(['-f', 'json', 'states', '-p', projectId]);
+  });
+
   it('reconciles creator assignments for unassigned issues in mapped stages', async () => {
     (execa as any as ExecaMock)
       // issues list

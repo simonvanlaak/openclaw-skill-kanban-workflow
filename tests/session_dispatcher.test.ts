@@ -41,6 +41,9 @@ describe('session workflow-loop', () => {
     expect(first.actions[0]?.text).toContain('WORKER_AGENT_MD (mandatory instructions loaded at task start):');
     expect(first.actions[0]?.text).toContain('## 2) Plane skill usage (required when task touches Plane)');
     expect(first.actions[0]?.text).toContain('must be stored on Nextcloud');
+    expect(first.actions[0]?.text).toContain('Verification harness (mandatory before Completed / In Review)');
+    expect(first.actions[0]?.text).toContain('Do **not** mark work as probably done.');
+    expect(first.actions[0]?.text).toContain('verification_primitives.sh http-status https://example.com 200');
     expect(first.actions[0]?.text).toContain('Respond with JSON only');
     expect(first.actions[0]?.text).toContain('WORKER_RESULT_JSON_SCHEMA_CONTRACT');
     expect(first.actions[0]?.text).toContain('decision: "blocked" | "completed" | "uncertain"');
@@ -60,6 +63,9 @@ describe('session workflow-loop', () => {
     });
 
     expect(second.actions[0]?.sessionId).toBe(a1Session);
+    expect(second.actions[0]?.text).toContain('VERIFICATION_HARNESS (mandatory before completed/in-review):');
+    expect(second.actions[0]?.text).toContain('decision="blocked" with the exact missing dependency');
+    expect(second.actions[0]?.text).toContain('verification_primitives.sh {http-status|file-exists|file-contains|diff-changed|metric-threshold}');
 
     const third = buildWorkflowLoopPlan({
       previousMap: second.map,
