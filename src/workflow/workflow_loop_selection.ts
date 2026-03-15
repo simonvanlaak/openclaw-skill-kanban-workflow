@@ -45,15 +45,19 @@ async function listBacklogItemsInOrder(
   return Promise.all(ids.map((id) => adapter.getWorkItem(id)));
 }
 
-function actorKeys(actor: { id?: string; username?: string; name?: string } | undefined): string[] {
+function actorKeys(actor: string | { id?: string; username?: string; name?: string } | undefined): string[] {
   if (!actor) return [];
+  if (typeof actor === 'string') {
+    const key = actor.trim().toLowerCase();
+    return key ? [key] : [];
+  }
   return [actor.id, actor.username, actor.name]
     .filter((x): x is string => Boolean(x && String(x).trim().length > 0))
     .map((x) => String(x).trim().toLowerCase());
 }
 
 function isAssignedToSelf(
-  assignees: readonly { id?: string; username?: string; name?: string }[] | undefined,
+  assignees: readonly (string | { id?: string; username?: string; name?: string })[] | undefined,
   me: { id?: string; username?: string; name?: string },
 ): boolean {
   if (!assignees || assignees.length === 0) return false;

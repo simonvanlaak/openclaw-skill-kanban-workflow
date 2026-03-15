@@ -6,6 +6,8 @@ export type Actor = {
   username?: string;
 };
 
+export type AssigneeRef = Actor | string;
+
 export type WorkItemLink = {
   id: string;
   title: string;
@@ -33,7 +35,7 @@ export type WorkItemDetails = {
   stage: StageKey;
   body?: string;
   labels: string[];
-  assignees?: Actor[];
+  assignees?: AssigneeRef[];
   updatedAt?: Date;
   attachments?: WorkItemAttachment[];
   linked?: WorkItemLink[];
