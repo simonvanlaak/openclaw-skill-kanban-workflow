@@ -249,65 +249,6 @@ async function findPotentialDuplicates(
   return scored.slice(0, maxResults);
 }
 
-async function runWorkflowLoopSelection(adapter: any, dryRun: boolean, requeueTargetStage: import('./stage.js').StageKey = 'stage:todo'): Promise<any> {
-  const autoReopen = await runAutoReopenOnHumanComment({ adapter, dryRun, requeueTargetStage });
-  const me = await adapter.whoami();
-  const inProgressIds: string[] = await adapter.listIdsByStage('stage:in-progress');
-
-  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
-  for (const id of inProgressIds) {
-    const item = await adapter.getWorkItem(id);
-    if (isAssignedToSelf(item.assignees, me)) {
-      ownInProgress.push({ id, updatedAt: item.updatedAt });
-    }
-  }
-
-  if (ownInProgress.length > 0) {
-    ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
-    const keep = ownInProgress[0]!;
-    if (!dryRun) {
-      for (const extra of ownInProgress.slice(1)) {
-        await adapter.setStage(extra.id, 'stage:todo');
-      }
-    }
-    const payload = await show(adapter, keep.id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      adapter, keep.id, String(payload?.item?.title ?? ''),
-    );
-    return {
-      tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
-      nextTicket: { ...payload, potentialDuplicates },
-      autoReopen,
-      dryRun,
-    };
-  }
-
-  const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
-  for (const id of backlogIds) {
-    const item = await adapter.getWorkItem(id);
-    if (!isAssignedToSelf(item.assignees, me)) continue;
-    if (!dryRun) {
-      await start(adapter, id);
-    }
-    const payload = await show(adapter, id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      adapter, id, String(payload?.item?.title ?? ''),
-    );
-    return {
-      tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
-      nextTicket: { ...payload, potentialDuplicates },
-      autoReopen,
-      dryRun,
-    };
-  }
-
-  return {
-    tick: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
-    autoReopen,
-    dryRun,
-  };
-}
-
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
   const [cmd = 'help', ...rest] = argv;
   const flags: Record<string, string | boolean | string[]> = {};
@@ -574,9 +515,9 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       const dryRun = Boolean(flags['dry-run']);
       const dispatchRunId = randomUUID();
-      const output = await runWorkflowLoopSelection(adapter, dryRun, requeueTargetStage);
       const previousMap = await loadSessionMap();
       archiveStaleBlockedWorkerSessions(previousMap, new Date(), 7);
+      const output = await runWorkflowLoopSelectionWithMap(adapter, previousMap, dryRun, requeueTargetStage);
       const plan = buildWorkflowLoopPlan({ autopilotOutput: output, previousMap, now: new Date() });
 
       const activeCarryForward = Boolean(
@@ -948,6 +889,70 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     io.stderr.write(`${err?.message ?? String(err)}\n`);
     return 1;
   }
+}
+
+async function runWorkflowLoopSelectionWithMap(
+  adapter: any,
+  map: import('./automation/session_dispatcher.js').SessionMap,
+  dryRun: boolean,
+  requeueTargetStage: import('./stage.js').StageKey = 'stage:todo',
+): Promise<any> {
+  const autoReopen = await runAutoReopenOnHumanComment({ adapter, map, dryRun, requeueTargetStage });
+  const me = await adapter.whoami();
+  const inProgressIds: string[] = await adapter.listIdsByStage('stage:in-progress');
+
+  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
+  for (const id of inProgressIds) {
+    const item = await adapter.getWorkItem(id);
+    if (isAssignedToSelf(item.assignees, me)) {
+      ownInProgress.push({ id, updatedAt: item.updatedAt });
+    }
+  }
+
+  if (ownInProgress.length > 0) {
+    ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+    const keep = ownInProgress[0]!;
+    if (!dryRun) {
+      for (const extra of ownInProgress.slice(1)) {
+        await adapter.setStage(extra.id, 'stage:todo');
+      }
+    }
+    const payload = await show(adapter, keep.id);
+    const potentialDuplicates = await findPotentialDuplicates(
+      adapter, keep.id, String(payload?.item?.title ?? ''),
+    );
+    return {
+      tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
+      nextTicket: { ...payload, potentialDuplicates },
+      autoReopen,
+      dryRun,
+    };
+  }
+
+  const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
+  for (const id of backlogIds) {
+    const item = await adapter.getWorkItem(id);
+    if (!isAssignedToSelf(item.assignees, me)) continue;
+    if (!dryRun) {
+      await start(adapter, id);
+    }
+    const payload = await show(adapter, id);
+    const potentialDuplicates = await findPotentialDuplicates(
+      adapter, id, String(payload?.item?.title ?? ''),
+    );
+    return {
+      tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
+      nextTicket: { ...payload, potentialDuplicates },
+      autoReopen,
+      dryRun,
+    };
+  }
+
+  return {
+    tick: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
+    autoReopen,
+    dryRun,
+  };
 }
 
 async function adapterFromConfig(cfg: any): Promise<any> {

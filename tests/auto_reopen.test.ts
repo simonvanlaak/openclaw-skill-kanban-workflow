@@ -11,6 +11,18 @@ function cursorPath(name: string): string {
 describe('auto-reopen on human comment', () => {
   test('moves blocked ticket back to backlog when a non-worker comment appears', async () => {
     const path = cursorPath('kwf-auto-reopen-blocked');
+    const map = {
+      version: 1 as const,
+      sessionsByTicket: {
+        'BL-1': {
+          sessionId: 'bl-1',
+          lastState: 'blocked' as const,
+          lastSeenAt: '2026-02-28T13:00:00Z',
+          workStartedAt: '2026-02-28T12:00:00Z',
+          continueCount: 1,
+        },
+      },
+    };
     const adapter = {
       whoami: vi.fn(async () => ({ username: 'kwf-bot' })),
       listIdsByStage: vi.fn(async (stage: string) => (stage === 'stage:blocked' ? ['BL-1'] : [])),
@@ -25,12 +37,15 @@ describe('auto-reopen on human comment', () => {
       setStage: vi.fn(async () => undefined),
     };
 
-    const res = await runAutoReopenOnHumanComment({ adapter, cursorPath: path });
+    const res = await runAutoReopenOnHumanComment({ adapter, map, cursorPath: path });
 
     expect(res.actions).toEqual([
       { ticketId: 'BL-1', fromStage: 'stage:blocked', toStage: 'stage:todo', triggerCommentId: 'c-human-1' },
     ]);
     expect(adapter.setStage).toHaveBeenCalledWith('BL-1', 'stage:todo');
+    expect(map.sessionsByTicket['BL-1']?.lastState).toBe('queued');
+    expect(map.sessionsByTicket['BL-1']?.workStartedAt).toBeUndefined();
+    expect(map.sessionsByTicket['BL-1']?.continueCount).toBeUndefined();
 
     await fs.rm(path, { force: true });
   });

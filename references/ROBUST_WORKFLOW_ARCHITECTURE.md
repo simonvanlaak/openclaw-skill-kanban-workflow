@@ -14,6 +14,7 @@ without losing execution context or wedging tickets during partial failures.
 3. Once a ticket is selected, it is immediately moved to `stage:in-progress` in
    Plane and is no longer affected by later `todo` reprioritization.
 4. Local runtime state must distinguish:
+   - `queued`: ticket is back in `todo` and waiting for normal reprioritization
    - `reserved`: ticket selected and moved to Plane `in-progress`, but worker
      execution is not yet durably confirmed
    - `in_progress`: worker execution is durably confirmed
@@ -39,6 +40,9 @@ execution exists for the selected session. Examples:
 - background delegation metadata exists
 - existing background delegation is still running
 - a worker reply is returned for the expected session
+
+Human reopen from `blocked` or `in-review` must transition local state to
+`queued`, not leave stale `blocked`, `completed`, or active execution markers.
 
 ## Implication for future refactors
 

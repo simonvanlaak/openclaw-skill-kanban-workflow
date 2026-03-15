@@ -3,6 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type { SessionMap } from '../automation/session_dispatcher.js';
+import { currentActiveSession } from './workflow_state.js';
 
 export type RocketChatStatusUpdate = {
   outcome: 'updated' | 'skipped_disabled' | 'skipped_dry_run' | 'skipped_unchanged' | 'error';
@@ -167,7 +168,7 @@ export async function maybeUpdateRocketChatStatusFromWorkflowLoop(params: {
       : undefined;
 
   const sessionLabel = activeTicketId ? params.map.sessionsByTicket?.[activeTicketId]?.sessionLabel : undefined;
-  const active = params.map.active;
+  const active = currentActiveSession(params.map);
   let sessionId: string | undefined;
   if (activeTicketId && active && active.ticketId === activeTicketId) {
     sessionId = active.sessionId;

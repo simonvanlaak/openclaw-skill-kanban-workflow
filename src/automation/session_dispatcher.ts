@@ -25,7 +25,7 @@ function loadWorkerAgentGuide(): string | null {
 export type SessionEntry = {
   sessionId: string;
   sessionLabel?: string;
-  lastState: 'reserved' | 'in_progress' | 'blocked' | 'completed' | 'no_work';
+  lastState: 'queued' | 'reserved' | 'in_progress' | 'blocked' | 'completed' | 'no_work';
   lastSeenAt: string;
   workStartedAt?: string;
   closedAt?: string;

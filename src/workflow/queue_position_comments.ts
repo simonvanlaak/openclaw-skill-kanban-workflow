@@ -1,4 +1,5 @@
 import type { SessionMap } from '../automation/session_dispatcher.js';
+import { currentActiveSession } from './workflow_state.js';
 
 const LEGACY_QUEUE_MARKER = '[kwf:queue-position]';
 const QUEUE_COMMENT_TEMPLATE_VERSION = 3;
@@ -105,7 +106,7 @@ export async function reconcileQueuePositionComments(params: {
   let unchanged = 0;
 
   const queueTicketIdsRaw = await params.adapter.listBacklogIdsInOrder();
-  const activeTicketId = params.map.active?.ticketId;
+  const activeTicketId = currentActiveSession(params.map)?.ticketId;
   // Defensive guard: backend/cache lag can briefly keep the active in-progress ticket
   // in backlog ordering. Never treat the active ticket as queued.
   const queueTicketIds = activeTicketId

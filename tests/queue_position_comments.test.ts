@@ -84,6 +84,35 @@ describe('queue_position_comments', () => {
     expect(map.queuePosition?.commentsByTicket['ACTIVE-1']).toBeUndefined();
   });
 
+  it('ignores stale map.active markers when the ticket is no longer locally active', async () => {
+    const addComment = vi.fn(async () => undefined);
+
+    const map = mapWithQueueState();
+    map.active = { ticketId: 'ACTIVE-1', sessionId: 'active-1' };
+    map.sessionsByTicket['ACTIVE-1'] = {
+      sessionId: 'active-1',
+      lastState: 'queued',
+      lastSeenAt: '2026-03-10T00:00:00.000Z',
+    };
+
+    await reconcileQueuePositionComments({
+      adapter: {
+        listBacklogIdsInOrder: async () => ['ACTIVE-1', 'T-2'],
+        listComments: async () => [],
+        addComment,
+        updateComment: vi.fn(async () => undefined),
+        deleteComment: vi.fn(async () => undefined),
+      },
+      map,
+      dryRun: false,
+    });
+
+    expect(addComment).toHaveBeenCalledWith(
+      'T-2',
+      expect.stringContaining('There are 1 tickets with higher priority'),
+    );
+  });
+
   it('updates existing comment when queue number changes and deletes when ticket leaves queue', async () => {
     const updateComment = vi.fn(async () => undefined);
     const deleteComment = vi.fn(async () => undefined);

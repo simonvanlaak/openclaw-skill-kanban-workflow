@@ -1,7 +1,9 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+import type { SessionMap } from './session_dispatcher.js';
 import type { StageKey } from '../stage.js';
+import { markTicketQueued } from '../workflow/workflow_state.js';
 
 export const DEFAULT_AUTO_REOPEN_CURSOR_PATH = '.tmp/kwf-auto-reopen-cursor.json';
 
@@ -120,6 +122,7 @@ async function saveCursor(cursorPath: string, cursor: AutoReopenCursor): Promise
 
 export async function runAutoReopenOnHumanComment(opts: {
   adapter: AutoReopenPort;
+  map?: SessionMap;
   dryRun?: boolean;
   cursorPath?: string;
   includeInternal?: boolean;
@@ -169,6 +172,9 @@ export async function runAutoReopenOnHumanComment(opts: {
         actions.push({ ticketId: id, fromStage: stage, toStage: requeueTargetStage, triggerCommentId: trigger.id });
         if (!dryRun) {
           await opts.adapter.setStage(id, requeueTargetStage);
+          if (opts.map) {
+            markTicketQueued(opts.map, id, new Date());
+          }
         }
       }
 
