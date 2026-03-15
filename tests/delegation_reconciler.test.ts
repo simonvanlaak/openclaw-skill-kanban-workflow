@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   loadSessionMap,
   saveSessionMap,
-  loadWorkerDelegationState,
+  loadTrackedWorkerRunState,
   runWorkflowLoopSelection,
   runWorkflowLoopController,
 } = vi.hoisted(() => ({
@@ -20,7 +20,7 @@ const {
     },
   })),
   saveSessionMap: vi.fn(async () => undefined),
-  loadWorkerDelegationState: vi.fn(async () => ({
+  loadTrackedWorkerRunState: vi.fn(async () => ({
     kind: 'completed',
     workerOutput: JSON.stringify({
       decision: 'completed',
@@ -95,7 +95,7 @@ vi.mock('../src/workflow/worker_runtime.js', async () => {
   const actual = await vi.importActual<typeof import('../src/workflow/worker_runtime.js')>('../src/workflow/worker_runtime.js');
   return {
     ...actual,
-    loadWorkerDelegationState,
+    loadTrackedWorkerRunState,
   };
 });
 

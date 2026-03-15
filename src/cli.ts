@@ -15,6 +15,7 @@ import { type WorkerRuntimeOptions } from './workflow/worker_runtime.js';
 import { runDelegationReconciler } from './workflow/delegation_reconciler.js';
 import { runHumanCommentReconciler } from './workflow/human_comment_reconciler.js';
 import { runDoneTodoRepair } from './workflow/done_todo_repair.js';
+import { runSubagentCompletionReconciler } from './workflow/subagent_completion_reconciler.js';
 import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { runWorkflowLoopController } from './workflow/workflow_loop_controller.js';
 import { runWorkflowLoopSelection } from './workflow/workflow_loop_selection.js';
@@ -33,6 +34,7 @@ function whatNextTipForCommand(cmd: string): string {
     case 'workflow-loop':
       return 'wait for the next scheduler tick';
     case 'reconcile-delegation':
+    case 'reconcile-subagent-ended':
     case 'reconcile-human-comment':
     case 'auto-reopen-scan':
     case 'repair-done-todo':
@@ -76,6 +78,7 @@ function writeHelp(io: CliIo): void {
       'Other:',
       '  kanban-workflow create --project-id <uuid> --title "..." [--body "..."]',
       '  kanban-workflow reconcile-delegation --ticket-id <ticket-id> --session-id <session-id>',
+      '  kanban-workflow reconcile-subagent-ended --child-session-key <session-key>',
       '  kanban-workflow reconcile-human-comment --ticket-id <ticket-id> [--comment-id <comment-id>]',
       '  kanban-workflow auto-reopen-scan [--dry-run]',
       '  kanban-workflow repair-done-todo [--dry-run]',
@@ -447,6 +450,25 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         adapter,
         ticketId,
         sessionId,
+        dispatchRunId: randomUUID(),
+        workerAgentId: WORKER_AGENT_ID,
+        workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,
+        requeueTargetStage,
+      });
+
+      if (!result.quiet) {
+        io.stdout.write(`${JSON.stringify(result.payload, null, 2)}\n`);
+      }
+      return result.exitCode;
+    }
+
+    if (cmd === 'reconcile-subagent-ended') {
+      const childSessionKey = String(flags['child-session-key'] ?? '').trim();
+      if (!childSessionKey) throw new Error('reconcile-subagent-ended requires --child-session-key');
+
+      const result = await runSubagentCompletionReconciler({
+        adapter,
+        childSessionKey,
         dispatchRunId: randomUUID(),
         workerAgentId: WORKER_AGENT_ID,
         workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,

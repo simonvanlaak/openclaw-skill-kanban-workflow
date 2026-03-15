@@ -5,7 +5,7 @@ import {
 } from '../automation/session_dispatcher.js';
 import type { StageKey } from '../stage.js';
 import {
-  loadWorkerDelegationState,
+  loadTrackedWorkerRunState,
   type WorkerRuntimeOptions,
 } from './worker_runtime.js';
 import { applyWorkerOutputToTicket, type WorkerExecutionOutcome } from './worker_output_applier.js';
@@ -94,9 +94,10 @@ export async function runDelegationReconciler(params: {
   requeueTargetStage?: StageKey;
   mapPath?: string;
 }): Promise<DelegationReconcileResult> {
-  const delegationState = await loadWorkerDelegationState(
-    params.sessionId,
+  const previousMap = await loadSessionMap(params.mapPath);
+  const delegationState = await loadTrackedWorkerRunState(
     params.ticketId,
+    previousMap.sessionsByTicket?.[params.ticketId],
     params.workerRuntimeOptions,
   );
 
@@ -107,7 +108,6 @@ export async function runDelegationReconciler(params: {
     return { quiet: true, exitCode: 0, reason: 'running' };
   }
 
-  const previousMap = await loadSessionMap(params.mapPath);
   const map = cloneMap(previousMap);
   const nowIso = new Date().toISOString();
   ensureActiveDelegationSession(map, params.ticketId, params.sessionId, nowIso);
