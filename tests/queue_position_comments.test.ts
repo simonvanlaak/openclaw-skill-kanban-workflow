@@ -48,6 +48,42 @@ describe('queue_position_comments', () => {
     expect(map.queuePosition?.commentsByTicket['T-2']?.commentId).toBe('T-2-c1');
   });
 
+  it('ignores active ticket when stale backlog ordering still contains it', async () => {
+    const commentStore = new Map<string, Array<{ id: string; body: string; author?: { id?: string } }>>();
+    const addComment = vi.fn(async (ticketId: string, body: string) => {
+      const arr = commentStore.get(ticketId) ?? [];
+      arr.unshift({ id: `${ticketId}-c1`, body, author: { id: 'me' } });
+      commentStore.set(ticketId, arr);
+    });
+    const deleteComment = vi.fn(async () => undefined);
+
+    const map = mapWithQueueState();
+    map.active = { ticketId: 'ACTIVE-1', sessionId: 'active-1' };
+    map.queuePosition!.commentsByTicket['ACTIVE-1'] = { commentId: 'active-old', higherPriorityCount: 2 };
+
+    const result = await reconcileQueuePositionComments({
+      adapter: {
+        // Simulate stale cache: active ticket still appears in backlog list.
+        listBacklogIdsInOrder: async () => ['ACTIVE-1', 'T-2'],
+        listComments: async (id: string) => commentStore.get(id) ?? [],
+        addComment,
+        updateComment: vi.fn(async () => undefined),
+        deleteComment,
+      },
+      map,
+      dryRun: false,
+    });
+
+    expect(result.created).toBe(1);
+    expect(addComment).toHaveBeenCalledTimes(1);
+    expect(addComment).toHaveBeenCalledWith(
+      'T-2',
+      expect.stringContaining('There are 1 tickets with higher priority that I need to complete (<1h)'),
+    );
+    expect(deleteComment).toHaveBeenCalledWith('ACTIVE-1', 'active-old');
+    expect(map.queuePosition?.commentsByTicket['ACTIVE-1']).toBeUndefined();
+  });
+
   it('updates existing comment when queue number changes and deletes when ticket leaves queue', async () => {
     const updateComment = vi.fn(async () => undefined);
     const deleteComment = vi.fn(async () => undefined);

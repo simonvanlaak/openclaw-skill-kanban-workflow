@@ -104,10 +104,16 @@ export async function reconcileQueuePositionComments(params: {
   let deleted = 0;
   let unchanged = 0;
 
-  const queueTicketIds = await params.adapter.listBacklogIdsInOrder();
+  const queueTicketIdsRaw = await params.adapter.listBacklogIdsInOrder();
+  const activeTicketId = params.map.active?.ticketId;
+  // Defensive guard: backend/cache lag can briefly keep the active in-progress ticket
+  // in backlog ordering. Never treat the active ticket as queued.
+  const queueTicketIds = activeTicketId
+    ? queueTicketIdsRaw.filter((ticketId) => ticketId !== activeTicketId)
+    : queueTicketIdsRaw;
   const queueSet = new Set(queueTicketIds);
   const trackedIds = Object.keys(commentsByTicket);
-  const activeOffset = params.map.active?.ticketId ? 1 : 0;
+  const activeOffset = activeTicketId ? 1 : 0;
   const averageDurationMs = averageDurationMsFromRecentSamples(state.recentCompletionDurationsMs);
   for (const ticketId of trackedIds) {
     if (queueSet.has(ticketId)) continue;
