@@ -107,7 +107,8 @@ export async function reconcileQueuePositionComments(params: {
   let unchanged = 0;
 
   const queueTicketIdsRaw = await params.adapter.listBacklogIdsInOrder();
-  const activeTicketId = params.activeTicketId ?? currentActiveSession(params.map)?.ticketId ?? null;
+  const explicitActiveTicketId = params.activeTicketId ?? null;
+  const activeTicketId = explicitActiveTicketId ?? currentActiveSession(params.map)?.ticketId ?? null;
   // Defensive guard: backend/cache lag can briefly keep the active in-progress ticket
   // in backlog ordering. Never treat the active ticket as queued.
   const queueTicketIds = activeTicketId
@@ -117,8 +118,52 @@ export async function reconcileQueuePositionComments(params: {
   const trackedIds = Object.keys(commentsByTicket);
   const activeOffset = activeTicketId ? 1 : 0;
   const averageDurationMs = averageDurationMsFromRecentSamples(state.recentCompletionDurationsMs);
+
+  if (activeTicketId && !params.dryRun) {
+    const trackedCommentId = commentsByTicket[activeTicketId]?.commentId;
+    const shouldScanForStrays = Boolean(explicitActiveTicketId);
+    const deletedActiveCommentIds = new Set<string>();
+
+    if (shouldScanForStrays) {
+      try {
+        const comments = await params.adapter.listComments(activeTicketId, {
+          limit: 100,
+          newestFirst: true,
+          includeInternal: true,
+        });
+        for (const comment of comments) {
+          if (!isQueueManagedComment(comment)) continue;
+          try {
+            await params.adapter.deleteComment(activeTicketId, comment.id);
+            deleted += 1;
+            deletedActiveCommentIds.add(comment.id);
+          } catch (error: any) {
+            errors.push(`delete-active ${activeTicketId}/${comment.id}: ${error?.message ?? String(error)}`);
+          }
+        }
+      } catch (error: any) {
+        errors.push(`listComments-active ${activeTicketId}: ${error?.message ?? String(error)}`);
+      }
+    }
+
+    if (trackedCommentId) {
+      if (!deletedActiveCommentIds.has(trackedCommentId)) {
+        try {
+          await params.adapter.deleteComment(activeTicketId, trackedCommentId);
+          deleted += 1;
+        } catch (error: any) {
+          errors.push(`delete-active-tracked ${activeTicketId}/${trackedCommentId}: ${error?.message ?? String(error)}`);
+        }
+      }
+      delete commentsByTicket[activeTicketId];
+    }
+  } else if (activeTicketId) {
+    delete commentsByTicket[activeTicketId];
+  }
+
   for (const ticketId of trackedIds) {
     if (queueSet.has(ticketId)) continue;
+    if (activeTicketId && ticketId === activeTicketId) continue;
     const trackedCommentId = commentsByTicket[ticketId]?.commentId;
     if (!trackedCommentId) {
       delete commentsByTicket[ticketId];

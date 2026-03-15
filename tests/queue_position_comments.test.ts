@@ -84,6 +84,51 @@ describe('queue_position_comments', () => {
     expect(map.queuePosition?.commentsByTicket['ACTIVE-1']).toBeUndefined();
   });
 
+  it('removes leftover queue comments from the active ticket even when tracking was lost', async () => {
+    const commentStore = new Map<string, Array<{ id: string; body: string; author?: { id?: string } }>>();
+    commentStore.set('ACTIVE-1', [
+      {
+        id: 'active-stray',
+        body: 'There are 1 tickets with higher priority that I need to complete (<2h) before I start this ticket. No explicit handoff is needed, I will pick it up automatically when it reaches the top. If this is urgent, change the priority.',
+        author: { id: 'me' },
+      },
+    ]);
+    const deleteComment = vi.fn(async (ticketId: string, commentId: string) => {
+      const arr = commentStore.get(ticketId) ?? [];
+      commentStore.set(ticketId, arr.filter((comment) => comment.id !== commentId));
+    });
+    const addComment = vi.fn(async (ticketId: string, body: string) => {
+      const arr = commentStore.get(ticketId) ?? [];
+      arr.unshift({ id: `${ticketId}-c1`, body, author: { id: 'me' } });
+      commentStore.set(ticketId, arr);
+    });
+
+    const map = mapWithQueueState();
+    map.active = { ticketId: 'ACTIVE-1', sessionId: 'active-1' };
+    map.sessionsByTicket['ACTIVE-1'] = {
+      sessionId: 'active-1',
+      lastState: 'reserved',
+      lastSeenAt: '2026-03-15T17:20:00.000Z',
+    };
+
+    const result = await reconcileQueuePositionComments({
+      adapter: {
+        listBacklogIdsInOrder: async () => ['ACTIVE-1', 'T-2'],
+        listComments: async (id: string) => commentStore.get(id) ?? [],
+        addComment,
+        updateComment: vi.fn(async () => undefined),
+        deleteComment,
+      },
+      map,
+      dryRun: false,
+      activeTicketId: 'ACTIVE-1',
+    });
+
+    expect(result.outcome).toBe('applied');
+    expect(deleteComment).toHaveBeenCalledWith('ACTIVE-1', 'active-stray');
+    expect(commentStore.get('ACTIVE-1')).toEqual([]);
+  });
+
   it('ignores stale map.active markers when the ticket is no longer locally active', async () => {
     const addComment = vi.fn(async () => undefined);
 
