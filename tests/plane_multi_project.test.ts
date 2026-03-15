@@ -21,9 +21,8 @@ describe('PlaneAdapter (multi-project)', () => {
 
   it('combines backlog order across projects (config order) and is assignee-only', async () => {
     (execa as any as ExecaMock)
-      // whoami -> me + projects list
+      // whoami
       .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // project A states
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
@@ -63,7 +62,7 @@ describe('PlaneAdapter (multi-project)', () => {
     const ids = await adapter.listBacklogIdsInOrder();
 
     expect(execa).toHaveBeenNthCalledWith(
-      3,
+      2,
       'plane',
       ['-f', 'json', 'states', '-p', 'projA'],
       expect.objectContaining({
@@ -73,7 +72,7 @@ describe('PlaneAdapter (multi-project)', () => {
     );
 
     expect(execa).toHaveBeenNthCalledWith(
-      4,
+      3,
       'plane',
       ['issues', 'list', '-p', 'projA', '--state', 'todo-a', '--assignee', 'me1', '-f', 'json'],
       expect.objectContaining({
@@ -83,7 +82,7 @@ describe('PlaneAdapter (multi-project)', () => {
     );
 
     expect(execa).toHaveBeenNthCalledWith(
-      5,
+      4,
       'plane',
       ['-f', 'json', 'states', '-p', 'projB'],
       expect.objectContaining({
@@ -93,7 +92,7 @@ describe('PlaneAdapter (multi-project)', () => {
     );
 
     expect(execa).toHaveBeenNthCalledWith(
-      6,
+      5,
       'plane',
       ['issues', 'list', '-p', 'projB', '--state', 'todo-b', '--assignee', 'me1', '-f', 'json'],
       expect.objectContaining({
@@ -108,9 +107,8 @@ describe('PlaneAdapter (multi-project)', () => {
 
   it('listIdsByStage reads from all configured projects (assignee-only gating)', async () => {
     (execa as any as ExecaMock)
-      // whoami -> me + projects list
+      // whoami
       .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // project A states
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
@@ -150,7 +148,7 @@ describe('PlaneAdapter (multi-project)', () => {
     const ids = await adapter.listIdsByStage('stage:blocked');
 
     expect(execa).toHaveBeenNthCalledWith(
-      3,
+      2,
       'plane',
       ['-f', 'json', 'states', '-p', 'projA'],
       expect.objectContaining({
@@ -159,7 +157,7 @@ describe('PlaneAdapter (multi-project)', () => {
       }),
     );
     expect(execa).toHaveBeenNthCalledWith(
-      4,
+      3,
       'plane',
       ['issues', 'list', '-p', 'projA', '--state', 'blocked-a', '--assignee', 'me1', '-f', 'json'],
       expect.objectContaining({
@@ -168,7 +166,7 @@ describe('PlaneAdapter (multi-project)', () => {
       }),
     );
     expect(execa).toHaveBeenNthCalledWith(
-      5,
+      4,
       'plane',
       ['-f', 'json', 'states', '-p', 'projB'],
       expect.objectContaining({
@@ -177,7 +175,7 @@ describe('PlaneAdapter (multi-project)', () => {
       }),
     );
     expect(execa).toHaveBeenNthCalledWith(
-      6,
+      5,
       'plane',
       ['issues', 'list', '-p', 'projB', '--state', 'blocked-b', '--assignee', 'me1', '-f', 'json'],
       expect.objectContaining({

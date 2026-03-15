@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 vi.mock('execa', () => {
   return {
@@ -21,6 +23,7 @@ describe('PlaneAdapter', () => {
     vi.unstubAllGlobals();
     delete process.env.PLANE_API_KEY;
     delete process.env.PLANE_BASE_URL;
+    return fs.rm(path.resolve(process.cwd(), '.tmp', 'kwf-plane-identity.json'), { force: true });
   });
 
   // plane CLI supports -f json; keep this test around as a safety net
@@ -50,6 +53,41 @@ describe('PlaneAdapter', () => {
 
     expect((execa as any).mock.calls[0]?.[1]).toEqual(['--format', 'json', 'issues', 'list', '-p', 'proj']);
     expect(snap.get('i4')?.stage.toString()).toBe('stage:in-progress');
+  });
+
+  it('falls back to cached identity on Plane rate limits', async () => {
+    await fs.mkdir(path.resolve(process.cwd(), '.tmp'), { recursive: true });
+    await fs.writeFile(
+      path.resolve(process.cwd(), '.tmp', 'kwf-plane-identity.json'),
+      JSON.stringify({
+        workspaceSlug: 'ws',
+        identity: {
+          id: 'cached-me',
+          username: 'cached@example.com',
+          name: 'Cached Me',
+        },
+      }),
+      'utf8',
+    );
+
+    (execa as any as ExecaMock).mockRejectedValueOnce(
+      new Error('API Error 429: {"error_code":5900,"error_message":"RATE_LIMIT_EXCEEDED"}'),
+    );
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId: 'proj',
+      bin: 'plane',
+      stageMap: {
+        Todo: 'stage:todo',
+      },
+    });
+
+    await expect(adapter.whoami()).resolves.toEqual({
+      id: 'cached-me',
+      username: 'cached@example.com',
+      name: 'Cached Me',
+    });
   });
 
   it('lists issues and maps state.name to canonical Stage', async () => {
@@ -128,8 +166,6 @@ describe('PlaneAdapter', () => {
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ id: 'me-1', email: 'me@example.com', display_name: 'Me' }),
       })
-      // whoami sanity check projects list
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // states lookup to resolve stage filter
       .mockResolvedValueOnce({
         stdout: JSON.stringify({
@@ -188,8 +224,6 @@ describe('PlaneAdapter', () => {
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ id: 'me-1', email: 'me@example.com', display_name: 'Me' }),
       })
-      // whoami sanity check projects list
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // states lookup to resolve todo state id
       .mockResolvedValueOnce({
         stdout: JSON.stringify({
@@ -288,7 +322,6 @@ describe('PlaneAdapter', () => {
       .mockResolvedValueOnce({
         stdout: JSON.stringify({ id: 'me-1', email: 'me@example.com', display_name: 'Me' }),
       })
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       .mockResolvedValueOnce({
         stdout: JSON.stringify({
           results: [{ id: 'state-todo-1', name: 'Todo' }],
@@ -524,9 +557,8 @@ describe('PlaneAdapter', () => {
 
   it('orders backlog by priority when priorities differ', async () => {
     (execa as any as ExecaMock)
-      // whoami -> me + projects list
+      // whoami
       .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1' }) })
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // states
       .mockResolvedValueOnce({
         stdout: JSON.stringify([
@@ -571,9 +603,8 @@ describe('PlaneAdapter', () => {
 
   it('keeps multi-assignee backlog tickets when self is one of the assignees', async () => {
     (execa as any as ExecaMock)
-      // whoami -> me + projects list
+      // whoami
       .mockResolvedValueOnce({ stdout: JSON.stringify({ id: 'me1', email: 'jules@local' }) })
-      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
       // states
       .mockResolvedValueOnce({
         stdout: JSON.stringify([

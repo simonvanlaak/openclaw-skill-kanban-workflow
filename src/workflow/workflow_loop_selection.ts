@@ -18,6 +18,8 @@ type WorkflowLoopSelectionAdapter = {
   whoami(): Promise<{ id?: string; username?: string; name?: string }>;
   listIdsByStage(stage: StageKey): Promise<string[]>;
   listBacklogIdsInOrder(): Promise<string[]>;
+  listStageItems?(stage: StageKey): Promise<WorkItemDetails[]>;
+  listBacklogItemsInOrder?(): Promise<WorkItemDetails[]>;
   getWorkItem(id: string): Promise<WorkItemDetails>;
   listComments(
     id: string,
@@ -37,6 +39,23 @@ function minimalTicketPayload(
     item,
     comments: [],
   };
+}
+
+async function listStageItems(
+  adapter: WorkflowLoopSelectionAdapter,
+  stage: StageKey,
+): Promise<WorkItemDetails[]> {
+  if (adapter.listStageItems) return adapter.listStageItems(stage);
+  const ids = await adapter.listIdsByStage(stage);
+  return Promise.all(ids.map((id) => adapter.getWorkItem(id)));
+}
+
+async function listBacklogItemsInOrder(
+  adapter: WorkflowLoopSelectionAdapter,
+): Promise<WorkItemDetails[]> {
+  if (adapter.listBacklogItemsInOrder) return adapter.listBacklogItemsInOrder();
+  const ids = await adapter.listBacklogIdsInOrder();
+  return Promise.all(ids.map((id) => adapter.getWorkItem(id)));
 }
 
 function actorKeys(actor: { id?: string; username?: string; name?: string } | undefined): string[] {
@@ -112,13 +131,12 @@ export async function runWorkflowLoopSelection(params: {
     persistMap: params.persistMap,
   });
   const me = await params.adapter.whoami();
-  const inProgressIds: string[] = await params.adapter.listIdsByStage('stage:in-progress');
+  const inProgressItems = await listStageItems(params.adapter, 'stage:in-progress');
 
   const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
-  for (const id of inProgressIds) {
-    const item = await params.adapter.getWorkItem(id);
+  for (const item of inProgressItems) {
     if (isAssignedToSelf(item.assignees, me)) {
-      ownInProgress.push({ id, updatedAt: item.updatedAt });
+      ownInProgress.push({ id: item.id, updatedAt: item.updatedAt });
     }
   }
 
@@ -165,10 +183,10 @@ export async function runWorkflowLoopSelection(params: {
     };
   }
 
-  const backlogIds: string[] = await params.adapter.listBacklogIdsInOrder();
-  for (const id of backlogIds) {
-    const item = await params.adapter.getWorkItem(id);
+  const backlogItems = await listBacklogItemsInOrder(params.adapter);
+  for (const item of backlogItems) {
     if (!isAssignedToSelf(item.assignees, me)) continue;
+    const id = item.id;
     if (!params.dryRun) {
       await reserveBacklogTicket({
         adapter: params.adapter,

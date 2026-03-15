@@ -269,6 +269,12 @@ function stateNameMatches(left: string | undefined, right: string | undefined): 
   return a.length > 0 && a === b;
 }
 
+function isRetryablePlaneIdentityError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  const normalized = message.toLowerCase();
+  return normalized.includes('rate_limit_exceeded') || normalized.includes('http 429') || normalized.includes('api error 429');
+}
+
 function extractIssueBody(raw: unknown): string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const issue: any = raw;
@@ -406,6 +412,7 @@ export class PlaneAdapter implements Adapter {
   private readonly baseArgs: readonly string[];
   // workspaceSlug is kept for config compatibility; current plane CLI reads workspace from env.
   private readonly workspaceSlug: string;
+  private readonly whoamiCachePath: string;
   private readonly projectIds: readonly string[];
   private readonly stageMap: Readonly<Record<string, import('../stage.js').StageKey>>;
   private readonly orderField?: string;
@@ -439,6 +446,7 @@ export class PlaneAdapter implements Adapter {
     this.cli = new CliRunner(opts.bin ?? 'plane');
     this.baseArgs = opts.baseArgs ?? [];
     this.workspaceSlug = opts.workspaceSlug;
+    this.whoamiCachePath = path.resolve(process.cwd(), '.tmp', 'kwf-plane-identity.json');
 
     const ids = (opts.projectIds && opts.projectIds.length > 0 ? [...opts.projectIds] : []).filter(Boolean);
     if (ids.length === 0) {
@@ -1295,21 +1303,63 @@ export class PlaneAdapter implements Adapter {
   }
 
   async whoami(): Promise<{ id?: string; username?: string; name?: string }> {
-    const parsed = (await this.runJson(['me'])) ?? {};
-
-    // Some flows (multi-project) validate the CLI is functional by listing projects too.
-    // We ignore the result; this is just a connectivity/auth sanity check.
     try {
-      await this.runJson(['projects', 'list']);
-    } catch {
-      // ignore
+      const parsed = (await this.runJson(['me'])) ?? {};
+      const identity = {
+        id: parsed?.id ? String(parsed.id) : undefined,
+        username: parsed?.email ? String(parsed.email) : undefined,
+        name: parsed?.display_name ? String(parsed.display_name) : parsed?.name ? String(parsed.name) : undefined,
+      };
+      await this.writeWhoamiCache(identity);
+      return identity;
+    } catch (error) {
+      if (isRetryablePlaneIdentityError(error)) {
+        const cached = await this.readWhoamiCache();
+        if (cached?.id || cached?.username || cached?.name) return cached;
+      }
+      throw error;
     }
+  }
 
-    return {
-      id: parsed?.id ? String(parsed.id) : undefined,
-      username: parsed?.email ? String(parsed.email) : undefined,
-      name: parsed?.display_name ? String(parsed.display_name) : parsed?.name ? String(parsed.name) : undefined,
-    };
+  private async writeWhoamiCache(identity: {
+    id?: string;
+    username?: string;
+    name?: string;
+  }): Promise<void> {
+    if (!identity.id && !identity.username && !identity.name) return;
+    try {
+      await fs.mkdir(path.dirname(this.whoamiCachePath), { recursive: true });
+      await fs.writeFile(
+        this.whoamiCachePath,
+        JSON.stringify({
+          workspaceSlug: this.workspaceSlug,
+          identity,
+          cachedAt: new Date().toISOString(),
+        }, null, 2),
+        'utf8',
+      );
+    } catch {
+      // Best-effort cache only.
+    }
+  }
+
+  private async readWhoamiCache(): Promise<{ id?: string; username?: string; name?: string } | null> {
+    try {
+      const raw = await fs.readFile(this.whoamiCachePath, 'utf8');
+      const parsed = JSON.parse(raw) as {
+        workspaceSlug?: string;
+        identity?: { id?: string; username?: string; name?: string };
+      };
+      if (parsed?.workspaceSlug && parsed.workspaceSlug !== this.workspaceSlug) return null;
+      if (!parsed?.identity) return null;
+      return {
+        id: parsed.identity.id ? String(parsed.identity.id) : undefined,
+        username: parsed.identity.username ? String(parsed.identity.username) : undefined,
+        name: parsed.identity.name ? String(parsed.identity.name) : undefined,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async listIdsByStage(stage: import('../stage.js').StageKey): Promise<string[]> {
@@ -1367,6 +1417,78 @@ export class PlaneAdapter implements Adapter {
       // deterministic order: oldest update first so ongoing work remains primary
       .sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0))
       .map((i) => i.id);
+  }
+
+  async listStageItems(stage: import('../stage.js').StageKey): Promise<Array<{
+    id: string;
+    projectId?: string;
+    identifier?: string;
+    title: string;
+    url?: string;
+    stage: import('../stage.js').StageKey;
+    body?: string;
+    labels: string[];
+    assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
+    updatedAt?: Date;
+  }>> {
+    const me = await this.whoami();
+    const meId = me.id;
+    const merged: Array<{
+      id: string;
+      projectId?: string;
+      identifier?: string;
+      title: string;
+      url?: string;
+      stage: import('../stage.js').StageKey;
+      body?: string;
+      labels: string[];
+      assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
+      updatedAt?: Date;
+    }> = [];
+
+    for (const projectId of this.projectIds) {
+      const stateId = await this.resolveStateIdForStage(projectId, stage).catch(() => undefined);
+      const issues = await this.listIssuesForSelection(projectId, {
+        assigneeId: meId || undefined,
+        stateId,
+      });
+      const projectIdentifier = await this.getProjectIdentifier(projectId).catch(() => undefined);
+
+      for (const issue of issues) {
+        const id = idFromUnknown((issue as any)?.id);
+        if (!id) continue;
+
+        const canonicalStage =
+          await this.resolveCanonicalStageForIssueRaw(projectId, issue).catch(() => undefined);
+        if (canonicalStage !== stage) continue;
+
+        if (meId) {
+          const assigneeIds = extractIssueAssigneeIds(issue);
+          if (assigneeIds.length > 0 && !assigneeIds.some((assigneeId) => assigneeMatchesSelf(assigneeId, me))) {
+            continue;
+          }
+        }
+
+        const sequenceId = Number((issue as any)?.sequence_id ?? (issue as any)?.sequenceId);
+        merged.push({
+          id,
+          projectId,
+          identifier:
+            projectIdentifier && Number.isFinite(sequenceId) && sequenceId > 0
+              ? `${projectIdentifier}-${Math.floor(sequenceId)}`
+              : undefined,
+          title: extractIssueTitle(issue) ?? id,
+          url: extractIssueUrl(issue),
+          stage,
+          body: extractIssueBody(issue),
+          labels: extractIssueLabels(issue),
+          assignees: extractIssueAssignees(issue),
+          updatedAt: extractIssueUpdatedAt(issue),
+        });
+      }
+    }
+
+    return merged.sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0));
   }
 
   async listIdsInDoneState(): Promise<string[]> {
@@ -1602,6 +1724,87 @@ export class PlaneAdapter implements Adapter {
     });
 
     return merged.map((i) => i.id);
+  }
+
+  async listBacklogItemsInOrder(): Promise<Array<{
+    id: string;
+    projectId?: string;
+    identifier?: string;
+    title: string;
+    url?: string;
+    stage: import('../stage.js').StageKey;
+    body?: string;
+    labels: string[];
+    assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
+    updatedAt?: Date;
+  }>> {
+    const me = await this.whoami();
+    const meId = me.id;
+    const merged: Array<{
+      id: string;
+      projectId?: string;
+      identifier?: string;
+      title: string;
+      url?: string;
+      stage: import('../stage.js').StageKey;
+      body?: string;
+      labels: string[];
+      assignees?: Array<{ id?: string; username?: string; name?: string } | string>;
+      updatedAt?: Date;
+      priority: number;
+    }> = [];
+
+    for (const projectId of this.projectIds) {
+      const backlogStateId = await this.resolveStateIdForStage(projectId, 'stage:todo').catch(() => undefined);
+      const issues = await this.listIssuesForSelection(projectId, {
+        assigneeId: meId || undefined,
+        stateId: backlogStateId,
+      });
+      const projectIdentifier = await this.getProjectIdentifier(projectId).catch(() => undefined);
+
+      for (const issue of issues) {
+        const id = idFromUnknown((issue as any)?.id);
+        if (!id) continue;
+
+        const canonicalStage =
+          await this.resolveCanonicalStageForIssueRaw(projectId, issue).catch(() => undefined);
+        if (canonicalStage !== 'stage:todo') continue;
+
+        if (meId) {
+          const assigneeIds = extractIssueAssigneeIds(issue);
+          if (assigneeIds.length > 0 && !assigneeIds.some((assigneeId) => assigneeMatchesSelf(assigneeId, me))) {
+            continue;
+          }
+        }
+
+        const sequenceId = Number((issue as any)?.sequence_id ?? (issue as any)?.sequenceId);
+        merged.push({
+          id,
+          projectId,
+          identifier:
+            projectIdentifier && Number.isFinite(sequenceId) && sequenceId > 0
+              ? `${projectIdentifier}-${Math.floor(sequenceId)}`
+              : undefined,
+          title: extractIssueTitle(issue) ?? id,
+          url: extractIssueUrl(issue),
+          stage: 'stage:todo',
+          body: extractIssueBody(issue),
+          labels: extractIssueLabels(issue),
+          assignees: extractIssueAssignees(issue),
+          updatedAt: extractIssueUpdatedAt(issue),
+          priority: extractPriorityFromIssue(issue) ?? Number.NEGATIVE_INFINITY,
+        });
+      }
+    }
+
+    return merged
+      .sort((a, b) => {
+        if (a.priority !== b.priority) return b.priority - a.priority;
+        const titleCmp = a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+        if (titleCmp !== 0) return titleCmp;
+        return a.id.localeCompare(b.id);
+      })
+      .map(({ priority: _priority, ...item }) => item);
   }
 
   async getWorkItem(id: string): Promise<{

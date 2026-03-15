@@ -84,6 +84,44 @@ describe('workflow_loop_selection', () => {
     expect(adapter.listLinkedWorkItems).not.toHaveBeenCalled();
   });
 
+  it('uses adapter-provided backlog summaries to avoid per-ticket work item reads', async () => {
+    const adapter = {
+      whoami: vi.fn(async () => ({ id: 'me-1', username: 'kwf-bot' })),
+      listIdsByStage: vi.fn(async () => []),
+      listBacklogIdsInOrder: vi.fn(async () => {
+        throw new Error('should not be called');
+      }),
+      listBacklogItemsInOrder: vi.fn(async () => [
+        {
+          id: 'T2',
+          title: 'Mine',
+          identifier: 'JULES-295',
+          stage: 'stage:todo' as const,
+          assignees: [{ id: 'me-1' }],
+          labels: [],
+        },
+      ]),
+      getWorkItem: vi.fn(async () => {
+        throw new Error('should not be called');
+      }),
+      setStage: vi.fn(async () => undefined),
+      listComments: vi.fn(async () => []),
+      listAttachments: vi.fn(async () => []),
+      listLinkedWorkItems: vi.fn(async () => []),
+      name: vi.fn(() => 'plane'),
+    };
+
+    const output = await runWorkflowLoopSelection({
+      adapter,
+      map: { version: 1, sessionsByTicket: {} },
+      dryRun: false,
+    });
+
+    expect(output.tick).toEqual({ kind: 'started', id: 'T2', reasonCode: 'start_next_assigned_backlog' });
+    expect(adapter.listBacklogItemsInOrder).toHaveBeenCalledTimes(1);
+    expect(adapter.getWorkItem).not.toHaveBeenCalled();
+  });
+
   it('persists ticket reservation before moving Plane to in-progress', async () => {
     const persistMap = vi.fn(async () => undefined);
     const adapter = {
