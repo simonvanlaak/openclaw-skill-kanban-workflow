@@ -2,6 +2,7 @@ import {
   buildWorkflowLoopPlan,
   markSessionInProgress,
   saveSessionMap,
+  type SessionEntry,
   type SessionMap,
   type WorkerCommandResult,
 } from '../automation/session_dispatcher.js';
@@ -72,6 +73,20 @@ export async function runWorkflowLoopController(params: {
   );
 
   const execution: WorkflowLoopExecution[] = [];
+
+  const ensureSessionEntry = (ticketId: string, sessionId: string): SessionEntry => {
+    const existing = plan.map.sessionsByTicket?.[ticketId];
+    if (existing) return existing;
+    const nowIso = new Date().toISOString();
+    const created: SessionEntry = {
+      sessionId,
+      lastState: 'in_progress',
+      lastSeenAt: nowIso,
+      workStartedAt: nowIso,
+    };
+    plan.map.sessionsByTicket[ticketId] = created;
+    return created;
+  };
 
   const recordCompletedWorkDuration = (ticketId: string, completedAt: Date): void => {
     const entry = plan.map.sessionsByTicket?.[ticketId];
@@ -157,6 +172,14 @@ export async function runWorkflowLoopController(params: {
       if (action.kind !== 'work') continue;
 
       if (dispatched.kind === 'delegated') {
+        const entry = ensureSessionEntry(action.ticketId, action.sessionId);
+        entry.activeRun = {
+          runId: dispatched.runId,
+          status: 'started',
+          sentAt: dispatched.startedAt,
+          waitTimeoutSeconds: dispatched.waitTimeoutSeconds,
+          sessionKey: dispatched.sessionKey,
+        };
         markSessionInProgress(plan.map, action.ticketId, new Date());
         execution.push({
           sessionId: action.sessionId,

@@ -30,6 +30,24 @@ export type SessionEntry = {
   workStartedAt?: string;
   closedAt?: string;
   continueCount?: number;
+  ticketMemory?: {
+    updatedAt: string;
+    lastDecision: 'completed' | 'blocked' | 'uncertain';
+    summary: string;
+    completedSteps: string[];
+    evidence: string[];
+    openQuestions: string[];
+    nextStepHint?: string;
+  };
+  activeRun?: {
+    runId: string;
+    status: 'started' | 'completed' | 'error';
+    sentAt: string;
+    waitTimeoutSeconds: number;
+    sessionKey?: string;
+    completedAt?: string;
+    error?: string;
+  };
   pendingMutation?: (
     | {
         kind: 'worker_result';
@@ -458,6 +476,7 @@ function finalizeTicket(map: SessionMap, ticketId: string, state: 'blocked' | 'c
   } else {
     delete entry.closedAt;
   }
+  delete entry.activeRun;
   if (map.active?.ticketId === ticketId) {
     map.active = undefined;
   }
@@ -493,6 +512,7 @@ export function applyWorkerCommandToSessionMap(
     delete entry.workStartedAt;
   }
   delete entry.pendingMutation;
+  delete entry.activeRun;
   if (map.active?.ticketId === ticketId) {
     map.active = undefined;
   }
@@ -689,6 +709,20 @@ function compactContextForPrompt(context: TicketContext): Record<string, unknown
   return compact;
 }
 
+function compactTicketMemoryForPrompt(memory: SessionEntry['ticketMemory']): Record<string, unknown> | null {
+  if (!memory) return null;
+  const compact: Record<string, unknown> = {
+    updatedAt: memory.updatedAt,
+    lastDecision: memory.lastDecision,
+    summary: memory.summary,
+  };
+  if (memory.completedSteps.length > 0) compact.completedSteps = memory.completedSteps;
+  if (memory.evidence.length > 0) compact.evidence = memory.evidence;
+  if (memory.openQuestions.length > 0) compact.openQuestions = memory.openQuestions;
+  if (memory.nextStepHint) compact.nextStepHint = memory.nextStepHint;
+  return compact;
+}
+
 function buildDeltaSinceLastTurn(context: TicketContext, previousSeenAtIso?: string): string {
   if (!previousSeenAtIso) return 'none (new session)';
   const previousMs = Date.parse(previousSeenAtIso);
@@ -713,9 +747,11 @@ function buildWorkInstruction(params: {
   sessionLabel: string;
   includeFullGuide: boolean;
   previousSeenAtIso?: string;
+  ticketMemory?: SessionEntry['ticketMemory'];
 }): string {
   const context = extractTicketContext(params.payload, params.ticketId);
   const contextJson = JSON.stringify(compactContextForPrompt(context), null, 2);
+  const ticketMemoryJson = JSON.stringify(compactTicketMemoryForPrompt(params.ticketMemory), null, 2);
   const delta = buildDeltaSinceLastTurn(context, params.previousSeenAtIso);
   const workerAgentGuide = loadWorkerAgentGuide();
 
@@ -748,6 +784,9 @@ function buildWorkInstruction(params: {
     '- Do not post boilerplate progress spam. Report only evidence-backed updates.',
     '',
     WORKER_RESULT_JSON_SCHEMA_CONTRACT,
+    '',
+    'PREVIOUS_ATTEMPT_MEMORY',
+    ticketMemoryJson,
     '',
     'CONTEXT_JSON',
     contextJson,
@@ -807,6 +846,7 @@ export function buildWorkflowLoopPlan(params: {
           sessionLabel,
           includeFullGuide: !reused,
           previousSeenAtIso: previousEntry?.lastSeenAt,
+          ticketMemory: previousEntry?.ticketMemory,
         }),
       });
       return { map, actions, activeTicketId: nextTicketId };
@@ -843,6 +883,7 @@ export function buildWorkflowLoopPlan(params: {
         sessionLabel,
         includeFullGuide: !reused,
         previousSeenAtIso: previousEntry?.lastSeenAt,
+        ticketMemory: previousEntry?.ticketMemory,
       }),
     });
     return { map, actions, activeTicketId: currentTicketId };

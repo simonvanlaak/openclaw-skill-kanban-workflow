@@ -115,6 +115,45 @@ describe('session workflow-loop', () => {
     expect(second.actions[0]?.text).toContain('Session label: A1 New title after grooming');
   });
 
+  it('injects local ticket memory into the next worker prompt', () => {
+    const plan = buildWorkflowLoopPlan({
+      previousMap: {
+        version: 1 as const,
+        active: {
+          ticketId: 'A1',
+          sessionId: 'a1',
+        },
+        sessionsByTicket: {
+          A1: {
+            sessionId: 'a1',
+            sessionLabel: 'A1 Fix login race',
+            lastState: 'in_progress' as const,
+            lastSeenAt: '2026-02-28T14:00:00.000Z',
+            ticketMemory: {
+              updatedAt: '2026-02-28T14:01:00.000Z',
+              lastDecision: 'blocked',
+              summary: 'Login repro is isolated to Safari private mode cookie handling.',
+              completedSteps: ['Captured a reproducible Safari-only failure trace.'],
+              evidence: ['trace.log shows the cookie write is rejected in private mode.'],
+              openQuestions: ['Do we want a cookie-free fallback for private mode?'],
+              nextStepHint: 'Prototype a sessionStorage fallback before retrying.',
+            },
+          },
+        },
+      },
+      now: new Date('2026-02-28T14:05:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: 'A1', inProgressIds: ['A1'] },
+        nextTicket: { kind: 'item', item: { id: 'A1', title: 'Fix login race' } },
+      },
+    });
+
+    expect(plan.actions[0]?.text).toContain('PREVIOUS_ATTEMPT_MEMORY');
+    expect(plan.actions[0]?.text).toContain('"lastDecision": "blocked"');
+    expect(plan.actions[0]?.text).toContain('"summary": "Login repro is isolated to Safari private mode cookie handling."');
+    expect(plan.actions[0]?.text).toContain('"nextStepHint": "Prototype a sessionStorage fallback before retrying."');
+  });
+
   it('uses linked issue key for worker session id + label when available', () => {
     const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },

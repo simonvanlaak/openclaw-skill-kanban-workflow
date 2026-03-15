@@ -4,8 +4,6 @@ import { randomUUID } from 'node:crypto';
 
 import { execa } from 'execa';
 
-import { parseWorkerOutputFromAgentCall } from './agent_io.js';
-
 type WorkerRouting = { sessionKey?: string; sessionId?: string; agentSessionId?: string };
 
 const WORKER_HISTORY_LIMIT = 100;
@@ -19,7 +17,14 @@ export type DispatchWorkerTurnResult =
       raw: string;
       routing?: WorkerRouting;
     }
-  | { kind: 'delegated'; notice: string };
+  | {
+      kind: 'delegated';
+      notice: string;
+      runId: string;
+      startedAt: string;
+      waitTimeoutSeconds: number;
+      sessionKey: string;
+    };
 
 export type WorkerDelegationMeta = {
   ticketId: string;
@@ -28,8 +33,9 @@ export type WorkerDelegationMeta = {
   agentId: string;
   thinking: string;
   startedAt: string;
-  syncTimeoutMs: number;
-  backgroundTimeoutMs: number;
+  runId: string;
+  sessionKey: string;
+  runTimeoutSeconds: number;
 };
 
 export type WorkerDelegationState =
@@ -49,6 +55,14 @@ export type WorkerRuntimeOptions = {
   defaultBackgroundTimeoutMs: number;
   isBackgroundDelegationAllowed(agentId: string): boolean;
   shouldStartInBackground?(agentId: string): boolean;
+};
+
+type AgentWaitSnapshot = {
+  runId: string;
+  status: 'ok' | 'error' | 'timeout';
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
 };
 
 function resolvePositiveInt(raw: string | undefined, fallback: number): number {
@@ -99,10 +113,9 @@ function withDispatchMetadataEnvelope(params: {
 
 function workerDelegationPaths(delegationDir: string, sessionId: string): {
   dir: string;
-  messagePath: string;
   resultPath: string;
+  waitResultPath: string;
   stderrPath: string;
-  exitCodePath: string;
   donePath: string;
   metaPath: string;
 } {
@@ -110,10 +123,9 @@ function workerDelegationPaths(delegationDir: string, sessionId: string): {
   const dir = path.join(delegationDir, safeSession);
   return {
     dir,
-    messagePath: path.join(dir, 'message.txt'),
     resultPath: path.join(dir, 'result.json'),
+    waitResultPath: path.join(dir, 'wait-result.json'),
     stderrPath: path.join(dir, 'stderr.log'),
-    exitCodePath: path.join(dir, 'exit.code'),
     donePath: path.join(dir, 'done'),
     metaPath: path.join(dir, 'meta.json'),
   };
@@ -344,89 +356,68 @@ export async function extractCompletedAssistantReplyWithLocalFallback(params: {
   return extractCompletedAssistantReplyFromLocalSessionSince(params.sessionKey, params.sinceTimestamp);
 }
 
-async function pollWorkerReply(params: {
-  sessionKey: string;
-  sinceTimestamp: number;
-  timeoutMs: number;
-}): Promise<{ workerOutput: string; raw: string; routing: WorkerRouting } | null> {
-  const deadline = Date.now() + params.timeoutMs;
-  while (Date.now() < deadline) {
-    let history: unknown = null;
-    let historyErr: unknown = null;
-    try {
-      history = await gatewayCall('chat.history', {
-        sessionKey: params.sessionKey,
-        limit: WORKER_HISTORY_LIMIT,
-      });
-    } catch (err) {
-      historyErr = err;
-    }
-
-    const latest = await extractCompletedAssistantReplyWithLocalFallback({
-      history,
-      sessionKey: params.sessionKey,
-      sinceTimestamp: params.sinceTimestamp,
-    });
-    if (latest) {
-      return {
-        workerOutput: latest.text,
-        raw: latest.text,
-        routing: {
-          sessionKey: params.sessionKey,
-          sessionId: latest.sessionId,
-        },
-      };
-    }
-
-    await sleep(1200);
-  }
-  return null;
-}
-
 function buildDelegationNotice(params: {
   ticketId: string;
-  text: string;
-  syncTimeoutMs: number;
   sessionId: string;
+  runId: string;
+  runTimeoutSeconds: number;
 }): string {
-  const seconds = Math.max(1, Math.round(params.syncTimeoutMs / 1000));
-  const rawText = params.text.trim();
-  const compactText = rawText.length > 1800 ? `${rawText.slice(0, 1800).trimEnd()}...` : rawText;
-
   return [
-    `No final worker response after ${seconds}s for ticket ${params.ticketId}. Re-dispatching this ticket in background with full context to continue execution.`,
-    '',
-    'RESUME_CONTEXT',
+    `Worker started for ticket ${params.ticketId}. Awaiting asynchronous completion.`,
     `sessionId: ${params.sessionId}`,
-    compactText,
+    `runId: ${params.runId}`,
+    `runTimeoutSeconds: ${params.runTimeoutSeconds}`,
   ].join('\n');
+}
+
+function parseChatSendStart(payload: unknown): { runId: string } {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('chat.send did not return a JSON object');
+  }
+  const row = payload as Record<string, unknown>;
+  const runId = String(row.runId ?? '').trim();
+  const status = String(row.status ?? '').trim().toLowerCase();
+  if (!runId) {
+    throw new Error('chat.send response did not include runId');
+  }
+  if (status && status !== 'started') {
+    throw new Error(`chat.send returned unexpected status=${status}`);
+  }
+  return { runId };
+}
+
+function parseAgentWaitSnapshot(payload: unknown): AgentWaitSnapshot {
+  if (!payload || typeof payload !== 'object') {
+    throw new Error('agent.wait did not return a JSON object');
+  }
+  const row = payload as Record<string, unknown>;
+  const runId = String(row.runId ?? '').trim();
+  const status = String(row.status ?? '').trim().toLowerCase();
+  if (!runId || (status !== 'ok' && status !== 'error' && status !== 'timeout')) {
+    throw new Error('agent.wait returned an invalid lifecycle snapshot');
+  }
+  return {
+    runId,
+    status,
+    startedAt: Number.isFinite(Number(row.startedAt)) ? Number(row.startedAt) : undefined,
+    endedAt: Number.isFinite(Number(row.endedAt)) ? Number(row.endedAt) : undefined,
+    error: typeof row.error === 'string' ? row.error : undefined,
+  };
 }
 
 async function startWorkerDelegation(
   params: {
     ticketId: string;
-    projectId?: string;
     dispatchRunId: string;
     agentId: string;
     sessionId: string;
-    text: string;
     thinking: string;
-    syncTimeoutMs: number;
+    runId: string;
+    sessionKey: string;
+    runTimeoutSeconds: number;
   },
   opts: WorkerRuntimeOptions,
 ): Promise<void> {
-  const message = withDispatchMetadataEnvelope({
-    ticketId: params.ticketId,
-    projectId: params.projectId,
-    dispatchRunId: params.dispatchRunId,
-    text: params.text,
-  });
-
-  const backgroundTimeoutMs = resolvePositiveInt(
-    process.env.KWF_WORKER_BACKGROUND_TIMEOUT_MS,
-    opts.defaultBackgroundTimeoutMs,
-  );
-
   const paths = workerDelegationPaths(opts.delegationDir, params.sessionId);
   const meta: WorkerDelegationMeta = {
     ticketId: params.ticketId,
@@ -435,92 +426,36 @@ async function startWorkerDelegation(
     agentId: params.agentId,
     thinking: params.thinking,
     startedAt: new Date().toISOString(),
-    syncTimeoutMs: params.syncTimeoutMs,
-    backgroundTimeoutMs,
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    runTimeoutSeconds: params.runTimeoutSeconds,
   };
 
   await fs.mkdir(paths.dir, { recursive: true });
-  await Promise.all([
-    fs.writeFile(paths.messagePath, message, 'utf8'),
-    fs.writeFile(paths.metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8'),
-  ]);
+  await fs.writeFile(paths.metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf8');
 
-  // IMPORTANT: Do not use `openclaw agent --session-id ...` here.
-  // That CLI path routes agent sessions under `agent:<agentId>:main` and only mutates the
-  // internal sessionId field, which collapses all tickets into the same "main" session.
-  //
-  // Instead, background delegation must target an explicit sessionKey, same as the
-  // synchronous gatewayCall path.
-  const sessionKey = workerSessionKey(params.agentId, params.sessionId);
-
+  const waitTimeoutMs = params.runTimeoutSeconds * 1000;
+  const gatewayTimeoutMs = waitTimeoutMs + 30_000;
   const script = [
     'set +e',
-    `session_key=${shellQuote(sessionKey)}`,
-    // Gateway RPC requires auth token; do not print it into logs.
-    'gateway_token=$(jq -r \'.gateway.auth.token\' /root/.openclaw/openclaw.json)',
-    // millisecond epoch, consistent with chat.history timestamps
-    'since_ts=$(date +%s%3N)',
-    // stable idempotency key for this background dispatch
-    'idem=$(python3 - <<"PY"\nimport uuid\nprint(uuid.uuid4())\nPY\n)',
-    `msg=$(cat ${shellQuote(paths.messagePath)})`,
-    `send_params=$(jq -cn --arg sessionKey "$session_key" --arg message "$msg" --arg idempotencyKey "$idem" '{sessionKey:$sessionKey,message:$message,idempotencyKey:$idempotencyKey}')`,
-    `max_send_attempts=${resolveWorkerSendMaxAttempts()}`,
-    `send_retry_delay_ms=${resolveWorkerSendRetryDelayMs()}`,
-    // Fire-and-forget dispatch. Only start polling if the worker turn was actually queued.
-    'send_rc=1',
-    'send_attempt=1',
-    'while [ "$send_attempt" -le "$max_send_attempts" ]; do',
-    `  openclaw gateway call chat.send --token "$gateway_token" --timeout 15000 --json --params "$send_params" >/dev/null 2>> ${shellQuote(paths.stderrPath)}`,
-    '  send_rc=$?',
-    '  if [ "$send_rc" -eq 0 ]; then',
-    '    break',
-    '  fi',
-    '  if [ "$send_attempt" -ge "$max_send_attempts" ]; then',
-    '    break',
-    '  fi',
-    `  sleep_secs=$(python3 - <<PY
-attempt = int("$send_attempt")
-delay_ms = int("$send_retry_delay_ms")
-print(f"{(attempt * delay_ms) / 1000:.3f}")
-PY
-)`,
-    '  sleep "$sleep_secs"',
-    '  send_attempt=$((send_attempt + 1))',
-    'done',
-    'if [ "$send_rc" -ne 0 ]; then',
-    `  printf "%s\n" "$send_rc" > ${shellQuote(paths.exitCodePath)}`,
-    `  touch ${shellQuote(paths.donePath)}`,
-    '  exit 0',
+    `run_id=${shellQuote(params.runId)}`,
+    `wait_timeout_ms=${waitTimeoutMs}`,
+    `wait_result_path=${shellQuote(paths.waitResultPath)}`,
+    `stderr_path=${shellQuote(paths.stderrPath)}`,
+    `done_path=${shellQuote(paths.donePath)}`,
+    `wait_params=$(jq -cn --arg runId "$run_id" --argjson timeoutMs "$wait_timeout_ms" '{runId:$runId,timeoutMs:$timeoutMs}')`,
+    `openclaw gateway call agent.wait --timeout ${gatewayTimeoutMs} --json --params "$wait_params" > "$wait_result_path" 2>> "$stderr_path"`,
+    'wait_rc=$?',
+    'if [ "$wait_rc" -ne 0 ]; then',
+    '  printf "{\\"runId\\":%s,\\"status\\":\\"error\\",\\"error\\":\\"agent.wait failed\\"}\\n" "$(printf \'%s\' "$run_id" | jq -Rsa .)" > "$wait_result_path"',
     'fi',
-    // Poll for the latest assistant text after since_ts.
-    `deadline=$(( since_ts + ${Math.floor(backgroundTimeoutMs)} ))`,
-    'while true; do',
-    '  now=$(date +%s%3N)',
-    '  if [ "$now" -ge "$deadline" ]; then',
-    '    break',
-    '  fi',
-    `  hist_params=$(jq -cn --arg sessionKey "$session_key" --argjson limit ${WORKER_HISTORY_LIMIT} '{sessionKey:$sessionKey,limit:$limit}')`,
-    `  hist=$(openclaw gateway call chat.history --token "$gateway_token" --timeout 15000 --json --params "$hist_params" 2>> ${shellQuote(paths.stderrPath)} || true)`,
-    // Mirror extractCompletedAssistantReplySince(): only accept a terminal assistant text reply,
-    // not an earlier progress note that is followed by toolUse/toolResult events.
-    `  text=$(printf "%s" "$hist" | jq -r --argjson since "$since_ts" '([.messages[]? | select((.timestamp|tonumber) > $since)] | sort_by(.timestamp|tonumber) | last) as $last | if ($last | type) != "object" then empty elif ($last.role // "" | ascii_downcase) != "assistant" then empty elif ($last.stopReason // "" | ascii_downcase) == "tooluse" then empty else ([ $last.content[]? | select((.type // "" | ascii_downcase)=="text") | (.text // "") | select(length>0)] | join("\\n")) end')`,
-    `  if [ -z "$text" ]; then\n    text=$(SESSION_KEY="$session_key" SINCE_TS="$since_ts" python3 - <<'PY'\nimport json\nimport os\nfrom pathlib import Path\n\nsession_key = os.environ.get('SESSION_KEY', '').strip()\nsince_raw = os.environ.get('SINCE_TS', '').strip()\ntry:\n    since_ts = int(since_raw)\nexcept Exception:\n    raise SystemExit(0)\n\nparts = session_key.split(':', 2)\nif len(parts) < 3 or parts[0] != 'agent' or not parts[1]:\n    raise SystemExit(0)\nagent_id = parts[1]\nroot = os.environ.get('OPENCLAW_HOME', '').strip() or str(Path.home() / '.openclaw')\nsessions_dir = Path(root) / 'agents' / agent_id / 'sessions'\nsessions_index_path = sessions_dir / 'sessions.json'\ntry:\n    index = json.loads(sessions_index_path.read_text())\n    entry = index.get(session_key) or {}\nexcept Exception:\n    raise SystemExit(0)\nsession_file = entry.get('sessionFile')\nif not session_file and entry.get('sessionId'):\n    session_file = str(sessions_dir / f"{entry['sessionId']}.jsonl")\nif not session_file:\n    raise SystemExit(0)\npath = Path(session_file)\ntry:\n    lines = path.read_text().splitlines()\nexcept Exception:\n    raise SystemExit(0)\nmessages = []\nfor line in lines:\n    line = line.strip()\n    if not line:\n        continue\n    try:\n        row = json.loads(line)\n    except Exception:\n        continue\n    if str(row.get('type', '')).lower() != 'message':\n        continue\n    message = row.get('message')\n    if not isinstance(message, dict):\n        continue\n    try:\n        ts = int(__import__('datetime').datetime.fromisoformat(str(row.get('timestamp', '')).replace('Z', '+00:00')).timestamp() * 1000)\n    except Exception:\n        continue\n    if ts <= since_ts:\n        continue\n    messages.append((ts, message))\nif not messages:\n    raise SystemExit(0)\nmessages.sort(key=lambda item: item[0])\n_, last = messages[-1]\nif str(last.get('role', '')).lower() != 'assistant':\n    raise SystemExit(0)\nif str(last.get('stopReason', '')).lower() == 'tooluse':\n    raise SystemExit(0)\ntexts = []\nfor entry in last.get('content') or []:\n    if isinstance(entry, dict) and str(entry.get('type', '')).lower() == 'text':\n        text = str(entry.get('text', '')).strip()\n        if text:\n            texts.append(text)\nif texts:\n    print('\\n'.join(texts), end='')\nPY\n)\n  fi`,
-    '  if [ -n "$text" ]; then',
-    `    printf "%s" "$text" > ${shellQuote(paths.resultPath)}`,
-    `    printf "0\\n" > ${shellQuote(paths.exitCodePath)}`,
-    `    touch ${shellQuote(paths.donePath)}`,
-    `    ${buildDelegationCompletionHook({ ticketId: params.ticketId, sessionId: params.sessionId, stderrPath: paths.stderrPath })}`,
-    '    break',
-    '  fi',
-    '  sleep 1.2',
-    'done',
+    'touch "$done_path"',
+    buildDelegationCompletionHook({ ticketId: params.ticketId, sessionId: params.sessionId, stderrPath: paths.stderrPath }),
   ].join('\n');
 
   const detached: any = execa('bash', ['-lc', script], { detached: true, stdio: 'ignore' } as any);
   if (typeof detached?.unref === 'function') detached.unref();
-  if (typeof detached?.catch === 'function') {
-    detached.catch(() => undefined);
-  }
+  if (typeof detached?.catch === 'function') detached.catch(() => undefined);
 }
 
 async function clearWorkerDelegation(delegationDir: string, sessionId: string): Promise<void> {
@@ -557,7 +492,7 @@ export async function loadWorkerDelegationState(
       return { kind: 'none' };
     }
 
-    const deadlineMs = startedAtMs + meta.backgroundTimeoutMs + graceMs;
+    const deadlineMs = startedAtMs + (meta.runTimeoutSeconds * 1000) + graceMs;
     if (Date.now() > deadlineMs) {
       await clearWorkerDelegation(opts.delegationDir, sessionId);
       return { kind: 'none' };
@@ -566,33 +501,42 @@ export async function loadWorkerDelegationState(
     return { kind: 'running', meta };
   }
 
-  const exitCodeRaw = await fs.readFile(paths.exitCodePath, 'utf8').catch(() => '');
-  const exitCode = Number.parseInt(exitCodeRaw.trim(), 10);
-  const stdoutRaw = await fs.readFile(paths.resultPath, 'utf8').catch(() => '');
-  const stderrRaw = await fs.readFile(paths.stderrPath, 'utf8').catch(() => '');
-  await clearWorkerDelegation(opts.delegationDir, sessionId);
-
-  if (Number.isFinite(exitCode) && exitCode !== 0 && !stdoutRaw.trim()) {
+  const waitRaw = await fs.readFile(paths.waitResultPath, 'utf8').catch(() => '');
+  let waitSnapshot: AgentWaitSnapshot;
+  try {
+    waitSnapshot = parseAgentWaitSnapshot(JSON.parse(waitRaw));
+  } catch {
+    await clearWorkerDelegation(opts.delegationDir, sessionId);
+    return { kind: 'none' };
+  }
+  if (waitSnapshot.runId !== meta.runId || waitSnapshot.status !== 'ok') {
+    await clearWorkerDelegation(opts.delegationDir, sessionId);
     return { kind: 'none' };
   }
 
-  const parsed = parseWorkerOutputFromAgentCall(stdoutRaw, stderrRaw);
-
-  if (!parsed.ok) {
-    throw new Error(`Background worker turn failed for ticket ${ticketId}: ${parsed.error ?? 'unknown error'}`);
+  const startedAtMs = Date.parse(meta.startedAt);
+  const reply = await extractCompletedAssistantReplyFromLocalSessionSince(meta.sessionKey, startedAtMs - 1);
+  if (!reply?.text?.trim()) {
+    const stderrRaw = await fs.readFile(paths.stderrPath, 'utf8').catch(() => '');
+    throw new Error(
+      `Background worker turn completed for ticket ${ticketId}, but no terminal assistant reply was found in session history.${stderrRaw ? ` stderr=${stderrRaw.trim()}` : ''}`,
+    );
   }
 
-  const fallbackRouting = {
-    sessionKey: workerSessionKey(meta.agentId, meta.sessionId),
-    sessionId: meta.sessionId,
-  };
+  await Promise.all([
+    fs.writeFile(paths.resultPath, reply.text, 'utf8'),
+    clearWorkerDelegation(opts.delegationDir, sessionId),
+  ]);
 
   return {
     kind: 'completed',
     meta,
-    workerOutput: parsed.workerOutput,
-    raw: parsed.raw,
-    routing: parsed.routing?.sessionKey || parsed.routing?.sessionId ? parsed.routing : fallbackRouting,
+    workerOutput: reply.text,
+    raw: reply.text,
+    routing: {
+      sessionKey: meta.sessionKey,
+      sessionId: reply.sessionId ?? meta.sessionId,
+    },
   };
 }
 
@@ -608,29 +552,6 @@ export async function dispatchWorkerTurn(
   },
   opts: WorkerRuntimeOptions,
 ): Promise<DispatchWorkerTurnResult> {
-  const startInBackground = Boolean(opts.shouldStartInBackground?.(params.agentId));
-  if (startInBackground) {
-    const syncTimeoutMs = resolvePositiveInt(process.env.KWF_WORKER_SYNC_TIMEOUT_MS, opts.defaultSyncTimeoutMs);
-    await startWorkerDelegation(
-      {
-        ticketId: params.ticketId,
-        projectId: params.projectId,
-        dispatchRunId: params.dispatchRunId,
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        text: params.text,
-        thinking: params.thinking,
-        syncTimeoutMs,
-      },
-      opts,
-    );
-
-    return {
-      kind: 'delegated',
-      notice: `Worker dispatched in background for ticket ${params.ticketId}. Session: ${params.sessionId}.`,
-    };
-  }
-
   const message = withDispatchMetadataEnvelope({
     ticketId: params.ticketId,
     projectId: params.projectId,
@@ -638,118 +559,49 @@ export async function dispatchWorkerTurn(
     text: params.text,
   });
 
-  const syncTimeoutMs = resolvePositiveInt(process.env.KWF_WORKER_SYNC_TIMEOUT_MS, opts.defaultSyncTimeoutMs);
-  const allowBackgroundDelegation = opts.isBackgroundDelegationAllowed(params.agentId);
+  const runTimeoutSeconds = timeoutMsToSeconds(
+    resolvePositiveInt(process.env.KWF_WORKER_RUN_TIMEOUT_MS, opts.defaultBackgroundTimeoutMs),
+  );
   const sessionKey = workerSessionKey(params.agentId, params.sessionId);
-  const dispatchStartTs = Date.now();
-
-  try {
-    await gatewayCallWithRetry({
-      method: 'chat.send',
-      rpcParams: {
-        sessionKey,
-        message,
-        idempotencyKey: randomUUID(),
-      },
-      timeoutMs: Math.max(syncTimeoutMs, 15_000),
-      maxAttempts: resolveWorkerSendMaxAttempts(),
-      retryDelayMs: resolveWorkerSendRetryDelayMs(),
-      shouldRetry: isTransientGatewayDispatchErr,
-    });
-
-    const reply = await pollWorkerReply({
+  const sendResponse = await gatewayCallWithRetry({
+    method: 'chat.send',
+    rpcParams: {
       sessionKey,
-      sinceTimestamp: dispatchStartTs,
-      timeoutMs: syncTimeoutMs,
-    });
+      message,
+      idempotencyKey: randomUUID(),
+    },
+    timeoutMs: Math.max(opts.defaultSyncTimeoutMs, 15_000),
+    maxAttempts: resolveWorkerSendMaxAttempts(),
+    retryDelayMs: resolveWorkerSendRetryDelayMs(),
+    shouldRetry: isTransientGatewayDispatchErr,
+  });
+  const started = parseChatSendStart(sendResponse);
 
-    if (!reply) {
-      if (!allowBackgroundDelegation) {
-        throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
-      }
+  await startWorkerDelegation(
+    {
+      ticketId: params.ticketId,
+      dispatchRunId: params.dispatchRunId,
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+      thinking: params.thinking,
+      runId: started.runId,
+      sessionKey,
+      runTimeoutSeconds,
+    },
+    opts,
+  );
 
-      await startWorkerDelegation(
-        {
-          ticketId: params.ticketId,
-          projectId: params.projectId,
-          dispatchRunId: params.dispatchRunId,
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          text: params.text,
-          thinking: params.thinking,
-          syncTimeoutMs,
-        },
-        opts,
-      );
-      return {
-        kind: 'delegated',
-        notice: buildDelegationNotice({
-          ticketId: params.ticketId,
-          text: params.text,
-          syncTimeoutMs,
-          sessionId: params.sessionId,
-        }),
-      };
-    }
-
-    if (hasTimedOutFallbackMessage(reply.workerOutput) || hasTimedOutFallbackMessage(reply.raw)) {
-      if (!allowBackgroundDelegation) {
-        throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
-      }
-      await startWorkerDelegation(
-        {
-          ticketId: params.ticketId,
-          projectId: params.projectId,
-          dispatchRunId: params.dispatchRunId,
-          agentId: params.agentId,
-          sessionId: params.sessionId,
-          text: params.text,
-          thinking: params.thinking,
-          syncTimeoutMs,
-        },
-        opts,
-      );
-      return {
-        kind: 'delegated',
-        notice: buildDelegationNotice({
-          ticketId: params.ticketId,
-          text: params.text,
-          syncTimeoutMs,
-          sessionId: params.sessionId,
-        }),
-      };
-    }
-
-    return { kind: 'immediate', workerOutput: reply.workerOutput, raw: reply.raw, routing: reply.routing };
-  } catch (err) {
-    if (!isRequestTimeoutErr(err)) throw err;
-
-    if (!allowBackgroundDelegation) {
-      throw new Error(`Worker turn timed out for ticket ${params.ticketId}`);
-    }
-
-    await startWorkerDelegation(
-      {
-        ticketId: params.ticketId,
-        projectId: params.projectId,
-        dispatchRunId: params.dispatchRunId,
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        text: params.text,
-        thinking: params.thinking,
-        syncTimeoutMs,
-      },
-      opts,
-    );
-
-    return {
-      kind: 'delegated',
-      notice: buildDelegationNotice({
-        ticketId: params.ticketId,
-        text: params.text,
-        syncTimeoutMs,
-        sessionId: params.sessionId,
-      }),
-    };
-  }
+  return {
+    kind: 'delegated',
+    notice: buildDelegationNotice({
+      ticketId: params.ticketId,
+      sessionId: params.sessionId,
+      runId: started.runId,
+      runTimeoutSeconds,
+    }),
+    runId: started.runId,
+    startedAt: new Date().toISOString(),
+    waitTimeoutSeconds: runTimeoutSeconds,
+    sessionKey,
+  };
 }

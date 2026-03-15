@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe('worker runtime dispatch retries', () => {
-  it('retries transient gateway close errors before failing a worker dispatch', async () => {
+  it('retries transient gateway close errors before starting an asynchronous worker run', async () => {
     process.env.KWF_WORKER_SEND_MAX_ATTEMPTS = '2';
     process.env.KWF_WORKER_SEND_RETRY_DELAY_MS = '1';
 
@@ -23,19 +23,7 @@ describe('worker runtime dispatch retries', () => {
       .fn()
       .mockRejectedValueOnce(new Error('Gateway call failed: Error: gateway closed (1000 normal closure): no close reason'))
       .mockResolvedValueOnce({ stdout: '{"runId":"retry-send","status":"started"}' })
-      .mockResolvedValueOnce({
-        stdout: JSON.stringify({
-          sessionId: 'session-123',
-          messages: [
-            {
-              role: 'assistant',
-              timestamp: 9_999_999_999_999,
-              stopReason: 'stop',
-              content: [{ type: 'text', text: '{"decision":"completed"}' }],
-            },
-          ],
-        }),
-      });
+      .mockResolvedValueOnce({ stdout: '' });
 
     vi.doMock('execa', () => ({ execa: execaMock }));
     const { dispatchWorkerTurn } = await import('../src/workflow/worker_runtime.js');
@@ -53,12 +41,9 @@ describe('worker runtime dispatch retries', () => {
         workerRuntimeOpts('/tmp/kwf-test-delegation'),
       ),
     ).resolves.toMatchObject({
-      kind: 'immediate',
-      workerOutput: '{"decision":"completed"}',
-      routing: {
-        sessionKey: 'agent:kanban-workflow-worker:jules-267',
-        sessionId: 'session-123',
-      },
+      kind: 'delegated',
+      runId: 'retry-send',
+      sessionKey: 'agent:kanban-workflow-worker:jules-267',
     });
 
     expect(execaMock).toHaveBeenCalledTimes(3);

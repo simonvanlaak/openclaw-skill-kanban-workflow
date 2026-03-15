@@ -78,6 +78,37 @@ function ensureSessionEntry(map: SessionMap, ticketId: string, sessionId: string
   return created;
 }
 
+function updateTicketMemory(entry: SessionEntry, result: {
+  decision: 'completed' | 'blocked' | 'uncertain';
+  completed_steps?: string[];
+  evidence?: string[];
+  blocker_resolve_requests?: string[];
+  clarification_questions?: string[];
+  solution_summary?: string;
+}): void {
+  const openQuestions = result.decision === 'completed'
+    ? []
+    : result.decision === 'blocked'
+      ? [...(result.blocker_resolve_requests ?? [])]
+      : [...(result.clarification_questions ?? [])];
+  const nextStepHint = openQuestions[0];
+  const summary = result.decision === 'completed'
+    ? String(result.solution_summary ?? '').trim()
+    : (result.completed_steps ?? [])[0]?.trim()
+      || nextStepHint
+      || `Worker returned ${result.decision}.`;
+
+  entry.ticketMemory = {
+    updatedAt: new Date().toISOString(),
+    lastDecision: result.decision,
+    summary,
+    completedSteps: [...(result.completed_steps ?? [])].slice(0, 5),
+    evidence: [...(result.evidence ?? [])].slice(0, 5),
+    openQuestions: openQuestions.slice(0, 5),
+    nextStepHint: nextStepHint ? String(nextStepHint).trim() : undefined,
+  };
+}
+
 function buildWorkerMutationPlan(params: {
   parsed: WorkerCommandResult;
   detail: string;
@@ -177,7 +208,16 @@ export async function applyWorkerOutputToTicket(params: {
     }, workerRuntimeOptions);
 
     if (retry.kind === 'delegated') {
+      const entry = ensureSessionEntry(map, action.ticketId, action.sessionId);
+      entry.activeRun = {
+        runId: retry.runId,
+        status: 'started',
+        sentAt: retry.startedAt,
+        waitTimeoutSeconds: retry.waitTimeoutSeconds,
+        sessionKey: retry.sessionKey,
+      };
       markSessionInProgress(map, action.ticketId, new Date());
+      await persistMapStep(persistMap, map);
       return {
         sessionId: action.sessionId,
         ticketId: action.ticketId,
@@ -246,6 +286,10 @@ export async function applyWorkerOutputToTicket(params: {
     effectiveCommentBody = mutationPlan.commentBody;
 
     const entry = ensureSessionEntry(map, action.ticketId, action.sessionId);
+    delete entry.activeRun;
+    if (validation.ok) {
+      updateTicketMemory(entry, validation.value);
+    }
     const pending = entry.pendingMutation;
     const reusePending = pending
       && pending.kind === 'worker_result'

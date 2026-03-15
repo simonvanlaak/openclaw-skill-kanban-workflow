@@ -258,15 +258,20 @@ describe('worker runtime terminal assistant reply detection', () => {
           agentId: 'kanban-workflow-worker',
           thinking: 'high',
           startedAt: '2026-03-15T12:53:12.073Z',
-          syncTimeoutMs: 30000,
-          backgroundTimeoutMs: 900000,
+          runId: 'run-267',
+          sessionKey: 'agent:kanban-workflow-worker:jules-267',
+          runTimeoutSeconds: 900,
         },
         null,
         2,
       ) + '\n',
       'utf8',
     );
-    await fs.writeFile(path.join(workDir, 'exit.code'), '1\n', 'utf8');
+    await fs.writeFile(
+      path.join(workDir, 'wait-result.json'),
+      JSON.stringify({ runId: 'run-267', status: 'error', error: 'agent.wait failed' }) + '\n',
+      'utf8',
+    );
     await fs.writeFile(
       path.join(workDir, 'stderr.log'),
       'Gateway call failed: Error: gateway closed (1000 normal closure): no close reason\n',
