@@ -1,6 +1,11 @@
 import { runAutoReopenOnHumanComment } from '../automation/auto_reopen.js';
 import type { SessionMap } from '../automation/session_dispatcher.js';
 import type { StageKey } from '../stage.js';
+import { currentActiveSession } from './workflow_state.js';
+import {
+  loadWorkerDelegationState,
+  type WorkerRuntimeOptions,
+} from './worker_runtime.js';
 import { show, start } from '../verbs/verbs.js';
 
 function actorKeys(actor: { id?: string; username?: string; name?: string } | undefined): string[] {
@@ -97,6 +102,7 @@ export async function runWorkflowLoopSelection(params: {
   map: SessionMap;
   dryRun: boolean;
   requeueTargetStage?: StageKey;
+  workerRuntimeOptions?: WorkerRuntimeOptions;
 }): Promise<any> {
   const requeueTargetStage = params.requeueTargetStage ?? 'stage:todo';
   const autoReopen = await runAutoReopenOnHumanComment({
@@ -119,6 +125,28 @@ export async function runWorkflowLoopSelection(params: {
   if (ownInProgress.length > 0) {
     ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
     const keep = ownInProgress[0]!;
+    const active = currentActiveSession(params.map);
+    if (!params.dryRun && active?.ticketId === keep.id && params.workerRuntimeOptions) {
+      const delegationState = await loadWorkerDelegationState(
+        active.sessionId,
+        keep.id,
+        params.workerRuntimeOptions,
+      );
+      if (delegationState.kind === 'running' || delegationState.kind === 'completed') {
+        const item = await params.adapter.getWorkItem(keep.id);
+        return {
+          tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
+          nextTicket: {
+            adapter: typeof params.adapter.name === 'function' ? params.adapter.name() : 'plane',
+            item,
+            comments: [],
+          },
+          autoReopen,
+          dryRun: params.dryRun,
+        };
+      }
+    }
+
     if (!params.dryRun) {
       for (const extra of ownInProgress.slice(1)) {
         await params.adapter.setStage(extra.id, 'stage:todo');

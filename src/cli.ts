@@ -398,6 +398,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         map: previousMap,
         dryRun,
         requeueTargetStage,
+        workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,
       });
       const result = await runWorkflowLoopController({
         adapter,
