@@ -79,6 +79,9 @@ describe('workflow_loop_selection', () => {
 
     expect(output.tick).toEqual({ kind: 'started', id: 'T2', reasonCode: 'start_next_assigned_backlog' });
     expect(adapter.setStage).toHaveBeenCalledWith('T2', 'stage:in-progress');
+    expect(adapter.listComments).not.toHaveBeenCalled();
+    expect(adapter.listAttachments).not.toHaveBeenCalled();
+    expect(adapter.listLinkedWorkItems).not.toHaveBeenCalled();
   });
 
   it('persists ticket reservation before moving Plane to in-progress', async () => {
@@ -231,6 +234,72 @@ describe('workflow_loop_selection', () => {
 
     expect(output.tick).toEqual({ kind: 'in_progress', id: 'A2', inProgressIds: ['A2'] });
     expect(loadWorkerDelegationState).toHaveBeenCalledWith('jules-281', 'A2', expect.any(Object));
+    expect(adapter.listComments).not.toHaveBeenCalled();
+    expect(adapter.listAttachments).not.toHaveBeenCalled();
+    expect(adapter.listLinkedWorkItems).not.toHaveBeenCalled();
+  });
+
+  it('normalizes a completed reservation to in-progress before continuing an active ticket', async () => {
+    const persistMap = vi.fn(async () => undefined);
+    const adapter = {
+      whoami: vi.fn(async () => ({ id: 'me-1', username: 'kwf-bot' })),
+      listIdsByStage: vi.fn(async (stage: string) => {
+        if (stage === 'stage:in-progress') return ['A2'];
+        return [];
+      }),
+      getWorkItem: vi.fn(async () => ({
+        id: 'A2',
+        title: 'Current task',
+        stage: 'stage:in-progress' as const,
+        assignees: [{ id: 'me-1' }],
+        updatedAt: new Date('2026-03-10T01:00:00.000Z'),
+        labels: [],
+      })),
+      setStage: vi.fn(async () => undefined),
+      listBacklogIdsInOrder: vi.fn(async () => []),
+      listComments: vi.fn(async () => []),
+      listAttachments: vi.fn(async () => []),
+      listLinkedWorkItems: vi.fn(async () => []),
+      name: vi.fn(() => 'plane'),
+    };
+
+    const map = {
+      version: 1 as const,
+      active: { ticketId: 'A2', sessionId: 'jules-294' },
+      sessionsByTicket: {
+        A2: {
+          sessionId: 'jules-294',
+          sessionLabel: 'JULES-294 Current task',
+          lastState: 'reserved' as const,
+          lastSeenAt: '2026-03-10T01:00:00.000Z',
+          workStartedAt: '2026-03-10T01:00:00.000Z',
+          pendingMutation: {
+            kind: 'ticket_reservation' as const,
+            targetStage: 'stage:in-progress' as const,
+            createdAt: '2026-03-10T01:00:00.000Z',
+            stageAppliedAt: '2026-03-10T01:00:01.000Z',
+          },
+        },
+      },
+    };
+
+    const output = await runWorkflowLoopSelection({
+      adapter,
+      map,
+      dryRun: false,
+      persistMap,
+      workerRuntimeOptions: {
+        delegationDir: '.tmp/test-delegations',
+        defaultSyncTimeoutMs: 30_000,
+        defaultBackgroundTimeoutMs: 60_000,
+        isBackgroundDelegationAllowed: () => false,
+      },
+    });
+
+    expect(output.tick).toEqual({ kind: 'in_progress', id: 'A2', inProgressIds: ['A2'] });
+    expect(map.sessionsByTicket.A2.lastState).toBe('in_progress');
+    expect(map.sessionsByTicket.A2.pendingMutation).toBeUndefined();
+    expect(persistMap).toHaveBeenCalledTimes(1);
     expect(adapter.listComments).not.toHaveBeenCalled();
     expect(adapter.listAttachments).not.toHaveBeenCalled();
     expect(adapter.listLinkedWorkItems).not.toHaveBeenCalled();

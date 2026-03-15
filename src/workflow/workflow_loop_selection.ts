@@ -1,6 +1,7 @@
 import { runAutoReopenOnHumanComment } from '../automation/auto_reopen.js';
 import {
   ensureSessionForTicket,
+  markSessionInProgress,
   type SessionMap,
 } from '../automation/session_dispatcher.js';
 import type { StageKey } from '../stage.js';
@@ -10,7 +11,7 @@ import {
   type WorkerRuntimeOptions,
 } from './worker_runtime.js';
 import type { WorkflowLoopSelectionOutput } from './workflow_loop_ports.js';
-import type { ShowPayload, WorkItemDetails, WorkItemLink, WorkItemAttachment } from '../verbs/types.js';
+import type { ShowPayload, WorkItemAttachment, WorkItemDetails, WorkItemLink } from '../verbs/types.js';
 
 type WorkflowLoopSelectionAdapter = {
   name(): string;
@@ -27,25 +28,14 @@ type WorkflowLoopSelectionAdapter = {
   setStage(id: string, stage: StageKey): Promise<void>;
 };
 
-async function showTicket(adapter: WorkflowLoopSelectionAdapter, id: string): Promise<ShowPayload> {
-  const item = await adapter.getWorkItem(id);
-  const [linked, comments, attachments] = await Promise.all([
-    adapter.listLinkedWorkItems(id),
-    adapter.listComments(id, {
-      newestFirst: true,
-      includeInternal: true,
-    }),
-    adapter.listAttachments(id),
-  ]);
-
+function minimalTicketPayload(
+  adapter: WorkflowLoopSelectionAdapter,
+  item: WorkItemDetails,
+): ShowPayload {
   return {
     adapter: adapter.name(),
-    item: {
-      ...item,
-      attachments,
-      linked,
-    },
-    comments,
+    item,
+    comments: [],
   };
 }
 
@@ -64,78 +54,6 @@ function isAssignedToSelf(
   const meKeys = new Set(actorKeys(me));
   if (meKeys.size === 0) return false;
   return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
-}
-
-function tokenize(text: string): Set<string> {
-  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
-  return new Set(words.filter((w) => w.length >= 3));
-}
-
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const tok of a) {
-    if (b.has(tok)) intersection++;
-  }
-  const union = a.size + b.size - intersection;
-  return union > 0 ? intersection / union : 0;
-}
-
-async function findPotentialDuplicates(
-  adapter: WorkflowLoopSelectionAdapter,
-  selectedTicketId: string,
-  selectedTitle: string,
-  maxResults = 10,
-): Promise<Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }>> {
-  const selectedTokens = tokenize(selectedTitle);
-  if (selectedTokens.size === 0) return [];
-
-  const stageKeys: StageKey[] = ['stage:todo', 'stage:blocked', 'stage:in-progress', 'stage:in-review'];
-  const candidateIds = new Set<string>();
-  for (const stage of stageKeys) {
-    try {
-      const ids: string[] = await adapter.listIdsByStage(stage);
-      for (const id of ids) {
-        if (id !== selectedTicketId) candidateIds.add(id);
-      }
-    } catch {
-      // best-effort only
-    }
-  }
-
-  try {
-    const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
-    for (const id of backlogIds) {
-      if (id !== selectedTicketId) candidateIds.add(id);
-    }
-  } catch {
-    // best-effort only
-  }
-
-  const scored: Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }> = [];
-  for (const id of candidateIds) {
-    try {
-      const item = await adapter.getWorkItem(id);
-      const title = String(item?.title ?? '');
-      const tokens = tokenize(title);
-      const score = jaccardSimilarity(selectedTokens, tokens);
-      if (score > 0.15) {
-        scored.push({
-          id,
-          identifier: item?.identifier,
-          title,
-          url: item?.url,
-          stage: item?.stage,
-          score: Math.round(score * 1000) / 1000,
-        });
-      }
-    } catch {
-      // Skip items that fail to load.
-    }
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, maxResults);
 }
 
 async function reserveBacklogTicket(params: {
@@ -207,6 +125,15 @@ export async function runWorkflowLoopSelection(params: {
   if (ownInProgress.length > 0) {
     ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
     const keep = ownInProgress[0]!;
+    const keepEntry = params.map.sessionsByTicket[keep.id];
+    if (
+      !params.dryRun &&
+      keepEntry?.pendingMutation?.kind === 'ticket_reservation' &&
+      keepEntry.pendingMutation.stageAppliedAt
+    ) {
+      markSessionInProgress(params.map, keep.id, new Date());
+      await params.persistMap?.(params.map);
+    }
     const active = currentActiveSession(params.map);
     if (!params.dryRun && active?.ticketId === keep.id && params.workerRuntimeOptions) {
       const delegationState = await loadWorkerDelegationState(
@@ -218,11 +145,7 @@ export async function runWorkflowLoopSelection(params: {
         const item = await params.adapter.getWorkItem(keep.id);
         return {
           tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
-          nextTicket: {
-            adapter: typeof params.adapter.name === 'function' ? params.adapter.name() : 'plane',
-            item,
-            comments: [],
-          },
+          nextTicket: minimalTicketPayload(params.adapter, item),
           autoReopen,
           dryRun: params.dryRun,
         };
@@ -234,13 +157,9 @@ export async function runWorkflowLoopSelection(params: {
         await params.adapter.setStage(extra.id, 'stage:todo');
       }
     }
-    const payload = await showTicket(params.adapter, keep.id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      params.adapter, keep.id, String(payload?.item?.title ?? ''),
-    );
     return {
       tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
-      nextTicket: { ...payload, potentialDuplicates },
+      nextTicket: minimalTicketPayload(params.adapter, await params.adapter.getWorkItem(keep.id)),
       autoReopen,
       dryRun: params.dryRun,
     };
@@ -260,13 +179,9 @@ export async function runWorkflowLoopSelection(params: {
         persistMap: params.persistMap,
       });
     }
-    const payload = await showTicket(params.adapter, id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      params.adapter, id, String(payload?.item?.title ?? ''),
-    );
     return {
       tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
-      nextTicket: { ...payload, potentialDuplicates },
+      nextTicket: minimalTicketPayload(params.adapter, item),
       autoReopen,
       dryRun: params.dryRun,
     };
