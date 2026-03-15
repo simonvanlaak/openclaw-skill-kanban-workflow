@@ -11,6 +11,7 @@ import {
 } from './automation/session_dispatcher.js';
 import { archiveStaleBlockedWorkerSessions } from './workflow/ticket_runtime.js';
 import { type WorkerRuntimeOptions } from './workflow/worker_runtime.js';
+import { runDelegationReconciler } from './workflow/delegation_reconciler.js';
 import { runWorkflowLoopController } from './workflow/workflow_loop_controller.js';
 import { runWorkflowLoopSelection } from './workflow/workflow_loop_selection.js';
 import { StageKeySchema } from './stage.js';
@@ -26,6 +27,8 @@ function whatNextTipForCommand(cmd: string): string {
     case 'setup':
       return 'run `kanban-workflow workflow-loop`';
     case 'workflow-loop':
+      return 'wait for the next scheduler tick';
+    case 'reconcile-delegation':
       return 'wait for the next scheduler tick';
     case 'show':
     case 'create':
@@ -65,6 +68,7 @@ function writeHelp(io: CliIo): void {
       '',
       'Other:',
       '  kanban-workflow create --project-id <uuid> --title "..." [--body "..."]',
+      '  kanban-workflow reconcile-delegation --ticket-id <ticket-id> --session-id <session-id>',
       '',
     ].join('\n'),
   );
@@ -416,6 +420,27 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
 
       io.stdout.write(`${JSON.stringify(result.payload, null, 2)}\n`);
       writeWhatNext(io, cmd);
+      return result.exitCode;
+    }
+
+    if (cmd === 'reconcile-delegation') {
+      const ticketId = String(flags['ticket-id'] ?? '').trim();
+      const sessionId = String(flags['session-id'] ?? '').trim();
+      if (!ticketId) throw new Error('reconcile-delegation requires --ticket-id');
+      if (!sessionId) throw new Error('reconcile-delegation requires --session-id');
+
+      const result = await runDelegationReconciler({
+        adapter,
+        ticketId,
+        sessionId,
+        dispatchRunId: randomUUID(),
+        workerAgentId: WORKER_AGENT_ID,
+        workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,
+      });
+
+      if (!result.quiet) {
+        io.stdout.write(`${JSON.stringify(result.payload, null, 2)}\n`);
+      }
       return result.exitCode;
     }
 

@@ -68,6 +68,19 @@ function workerSessionKey(agentId: string, sessionId: string): string {
   return `agent:${agentId}:${sessionId}`;
 }
 
+export function buildDelegationCompletionHook(params: {
+  ticketId: string;
+  sessionId: string;
+  stderrPath: string;
+}): string {
+  return [
+    '(',
+    '  cd /root/.openclaw/workspace/skills/kanban-workflow || exit 0',
+    `  npm run -s kanban-workflow -- reconcile-delegation --ticket-id ${shellQuote(params.ticketId)} --session-id ${shellQuote(params.sessionId)} >/dev/null 2>> ${shellQuote(params.stderrPath)} || true`,
+    ') >/dev/null 2>&1 &',
+  ].join('\n');
+}
+
 function withDispatchMetadataEnvelope(params: {
   ticketId: string;
   projectId?: string;
@@ -496,6 +509,7 @@ PY
     `    printf "%s" "$text" > ${shellQuote(paths.resultPath)}`,
     `    printf "0\\n" > ${shellQuote(paths.exitCodePath)}`,
     `    touch ${shellQuote(paths.donePath)}`,
+    `    ${buildDelegationCompletionHook({ ticketId: params.ticketId, sessionId: params.sessionId, stderrPath: paths.stderrPath })}`,
     '    break',
     '  fi',
     '  sleep 1.2',

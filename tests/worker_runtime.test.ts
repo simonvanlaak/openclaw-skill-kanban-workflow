@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  buildDelegationCompletionHook,
   extractCompletedAssistantReplyFromLocalSessionSince,
   extractCompletedAssistantReplySince,
   extractCompletedAssistantReplyWithLocalFallback,
@@ -27,6 +28,20 @@ afterEach(async () => {
 });
 
 describe('worker runtime terminal assistant reply detection', () => {
+  it('builds a delegation completion hook that triggers immediate reconciliation', () => {
+    const hook = buildDelegationCompletionHook({
+      ticketId: 'A1',
+      sessionId: 'jules-281',
+      stderrPath: '/tmp/kwf-stderr.log',
+    });
+
+    expect(hook).toContain('reconcile-delegation');
+    expect(hook).toContain('--ticket-id');
+    expect(hook).toContain("'A1'");
+    expect(hook).toContain('--session-id');
+    expect(hook).toContain("'jules-281'");
+  });
+
   it('waits for a terminal assistant message instead of returning an earlier progress note', () => {
     const history = {
       sessionId: 'agent:kanban-workflow-worker:JULES-274',
@@ -270,4 +285,3 @@ describe('worker runtime terminal assistant reply detection', () => {
     await expect(fs.access(workDir)).rejects.toThrow();
   });
 });
-
