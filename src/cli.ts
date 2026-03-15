@@ -6,15 +6,15 @@ import { execa } from 'execa';
 import { loadConfigFromFile } from './config.js';
 import { runSetup } from './setup.js';
 import { PlaneAdapter } from './adapters/plane.js';
-import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import {
   loadSessionMap,
 } from './automation/session_dispatcher.js';
 import { archiveStaleBlockedWorkerSessions } from './workflow/ticket_runtime.js';
 import { type WorkerRuntimeOptions } from './workflow/worker_runtime.js';
 import { runWorkflowLoopController } from './workflow/workflow_loop_controller.js';
+import { runWorkflowLoopSelection } from './workflow/workflow_loop_selection.js';
 import { StageKeySchema } from './stage.js';
-import { create, show, start } from './verbs/verbs.js';
+import { create, show } from './verbs/verbs.js';
 
 export type CliIo = {
   stdout: { write(chunk: string): void };
@@ -123,101 +123,6 @@ async function ensurePlaneEnvFromHelper(): Promise<void> {
   } catch {
     // best-effort only; adapter auth will error with actionable message if still missing
   }
-}
-
-function actorKeys(actor: { id?: string; username?: string; name?: string } | undefined): string[] {
-  if (!actor) return [];
-  return [actor.id, actor.username, actor.name]
-    .filter((x): x is string => Boolean(x && String(x).trim().length > 0))
-    .map((x) => String(x).trim().toLowerCase());
-}
-
-function isAssignedToSelf(assignees: readonly { id?: string; username?: string; name?: string }[] | undefined, me: { id?: string; username?: string; name?: string }): boolean {
-  if (!assignees || assignees.length === 0) return false;
-  const meKeys = new Set(actorKeys(me));
-  if (meKeys.size === 0) return false;
-  return assignees.some((a) => actorKeys(a).some((k) => meKeys.has(k)));
-}
-
-/** Tokenize a string into lowercase alphanumeric words (3+ chars). */
-function tokenize(text: string): Set<string> {
-  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().split(/\s+/);
-  return new Set(words.filter((w) => w.length >= 3));
-}
-
-/** Jaccard similarity between two token sets (0..1). */
-function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
-  if (a.size === 0 && b.size === 0) return 0;
-  let intersection = 0;
-  for (const tok of a) {
-    if (b.has(tok)) intersection++;
-  }
-  const union = a.size + b.size - intersection;
-  return union > 0 ? intersection / union : 0;
-}
-
-/**
- * Find potential duplicate tickets across all open stages by comparing title similarity.
- * Returns up to `maxResults` candidates sorted by descending similarity score.
- */
-async function findPotentialDuplicates(
-  adapter: any,
-  selectedTicketId: string,
-  selectedTitle: string,
-  maxResults = 10,
-): Promise<Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }>> {
-  const selectedTokens = tokenize(selectedTitle);
-  if (selectedTokens.size === 0) return [];
-
-  // Gather candidate IDs from all open stages (deduplicated, excluding the selected ticket).
-  const stageKeys: Array<import('./stage.js').StageKey> = ['stage:todo', 'stage:blocked', 'stage:in-progress', 'stage:in-review'];
-  const candidateIds = new Set<string>();
-  for (const stage of stageKeys) {
-    try {
-      const ids: string[] = await adapter.listIdsByStage(stage);
-      for (const id of ids) {
-        if (id !== selectedTicketId) candidateIds.add(id);
-      }
-    } catch {
-      // If a stage isn't configured or errors, skip it.
-    }
-  }
-
-  // Also include backlog items not yet captured.
-  try {
-    const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
-    for (const id of backlogIds) {
-      if (id !== selectedTicketId) candidateIds.add(id);
-    }
-  } catch {
-    // best-effort
-  }
-
-  // Score each candidate by title similarity.
-  const scored: Array<{ id: string; identifier?: string; title: string; url?: string; stage?: string; score: number }> = [];
-  for (const id of candidateIds) {
-    try {
-      const item = await adapter.getWorkItem(id);
-      const title = String(item?.title ?? '');
-      const tokens = tokenize(title);
-      const score = jaccardSimilarity(selectedTokens, tokens);
-      if (score > 0.15) {
-        scored.push({
-          id,
-          identifier: item?.identifier,
-          title,
-          url: item?.url,
-          stage: item?.stage,
-          score: Math.round(score * 1000) / 1000,
-        });
-      }
-    } catch {
-      // Skip items that fail to load.
-    }
-  }
-
-  scored.sort((a, b) => b.score - a.score);
-  return scored.slice(0, maxResults);
 }
 
 function parseArgs(argv: string[]): { cmd: string; flags: Record<string, string | boolean | string[]> } {
@@ -488,7 +393,12 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       const dispatchRunId = randomUUID();
       const previousMap = await loadSessionMap();
       archiveStaleBlockedWorkerSessions(previousMap, new Date(), 7);
-      const output = await runWorkflowLoopSelectionWithMap(adapter, previousMap, dryRun, requeueTargetStage);
+      const output = await runWorkflowLoopSelection({
+        adapter,
+        map: previousMap,
+        dryRun,
+        requeueTargetStage,
+      });
       const result = await runWorkflowLoopController({
         adapter,
         output,
@@ -525,70 +435,6 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     io.stderr.write(`${err?.message ?? String(err)}\n`);
     return 1;
   }
-}
-
-async function runWorkflowLoopSelectionWithMap(
-  adapter: any,
-  map: import('./automation/session_dispatcher.js').SessionMap,
-  dryRun: boolean,
-  requeueTargetStage: import('./stage.js').StageKey = 'stage:todo',
-): Promise<any> {
-  const autoReopen = await runAutoReopenOnHumanComment({ adapter, map, dryRun, requeueTargetStage });
-  const me = await adapter.whoami();
-  const inProgressIds: string[] = await adapter.listIdsByStage('stage:in-progress');
-
-  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
-  for (const id of inProgressIds) {
-    const item = await adapter.getWorkItem(id);
-    if (isAssignedToSelf(item.assignees, me)) {
-      ownInProgress.push({ id, updatedAt: item.updatedAt });
-    }
-  }
-
-  if (ownInProgress.length > 0) {
-    ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
-    const keep = ownInProgress[0]!;
-    if (!dryRun) {
-      for (const extra of ownInProgress.slice(1)) {
-        await adapter.setStage(extra.id, 'stage:todo');
-      }
-    }
-    const payload = await show(adapter, keep.id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      adapter, keep.id, String(payload?.item?.title ?? ''),
-    );
-    return {
-      tick: { kind: 'in_progress', id: keep.id, inProgressIds: [keep.id] },
-      nextTicket: { ...payload, potentialDuplicates },
-      autoReopen,
-      dryRun,
-    };
-  }
-
-  const backlogIds: string[] = await adapter.listBacklogIdsInOrder();
-  for (const id of backlogIds) {
-    const item = await adapter.getWorkItem(id);
-    if (!isAssignedToSelf(item.assignees, me)) continue;
-    if (!dryRun) {
-      await start(adapter, id);
-    }
-    const payload = await show(adapter, id);
-    const potentialDuplicates = await findPotentialDuplicates(
-      adapter, id, String(payload?.item?.title ?? ''),
-    );
-    return {
-      tick: { kind: 'started', id, reasonCode: 'start_next_assigned_backlog' },
-      nextTicket: { ...payload, potentialDuplicates },
-      autoReopen,
-      dryRun,
-    };
-  }
-
-  return {
-    tick: { kind: 'no_work', reasonCode: 'no_backlog_assigned' },
-    autoReopen,
-    dryRun,
-  };
 }
 
 async function adapterFromConfig(cfg: any): Promise<any> {
