@@ -117,14 +117,11 @@ export async function runWorkflowLoopSelection(params: {
     persistMap: params.persistMap,
   });
   const me = await params.adapter.whoami();
-  const inProgressItems = await listStageItems(params.adapter, 'stage:in-progress');
-
-  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = [];
-  for (const item of inProgressItems) {
-    if (isAssignedToSelf(item.assignees, me)) {
-      ownInProgress.push({ id: item.id, updatedAt: item.updatedAt });
-    }
-  }
+  const ownInProgress: Array<{ id: string; updatedAt?: Date }> = params.adapter.listOwnInProgressItems
+    ? await params.adapter.listOwnInProgressItems()
+    : (await listStageItems(params.adapter, 'stage:in-progress'))
+        .filter((item) => isAssignedToSelf(item.assignees, me))
+        .map((item) => ({ id: item.id, updatedAt: item.updatedAt }));
 
   if (ownInProgress.length > 0) {
     ownInProgress.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
@@ -139,7 +136,7 @@ export async function runWorkflowLoopSelection(params: {
       await params.persistMap?.(params.map);
     }
     const active = currentActiveSession(params.map);
-    if (!params.dryRun && active?.ticketId === keep.id && params.workerRuntimeOptions) {
+    if (!params.dryRun && active && active.ticketId === keep.id && params.workerRuntimeOptions) {
       const delegationState = await loadWorkerDelegationState(
         active.sessionId,
         keep.id,

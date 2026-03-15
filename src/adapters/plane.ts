@@ -1491,6 +1491,43 @@ export class PlaneAdapter implements Adapter {
     return merged.sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0));
   }
 
+  async listOwnInProgressItems(): Promise<Array<{ id: string; updatedAt?: Date }>> {
+    const me = await this.whoami();
+    const meId = me.id;
+    const merged: Array<{ id: string; updatedAt?: Date }> = [];
+
+    for (const projectId of this.projectIds) {
+      const stateId = await this.resolveStateIdForStage(projectId, 'stage:in-progress').catch(() => undefined);
+      const issues = await this.listIssuesForSelection(projectId, {
+        assigneeId: meId || undefined,
+        stateId,
+      });
+
+      for (const issue of issues) {
+        const id = idFromUnknown((issue as any)?.id);
+        if (!id) continue;
+
+        const canonicalStage =
+          await this.resolveCanonicalStageForIssueRaw(projectId, issue).catch(() => undefined);
+        if (canonicalStage !== 'stage:in-progress') continue;
+
+        if (meId) {
+          const assigneeIds = extractIssueAssigneeIds(issue);
+          if (assigneeIds.length > 0 && !assigneeIds.some((assigneeId) => assigneeMatchesSelf(assigneeId, me))) {
+            continue;
+          }
+        }
+
+        merged.push({
+          id,
+          updatedAt: extractIssueUpdatedAt(issue),
+        });
+      }
+    }
+
+    return merged.sort((a, b) => (b.updatedAt?.getTime() ?? 0) - (a.updatedAt?.getTime() ?? 0));
+  }
+
   async listIdsInDoneState(): Promise<string[]> {
     const me = await this.whoami();
     const meId = me.id;

@@ -84,6 +84,45 @@ describe('workflow_loop_selection', () => {
     expect(adapter.listLinkedWorkItems).not.toHaveBeenCalled();
   });
 
+  it('uses adapter-provided in-progress summaries to avoid full stage-item scans', async () => {
+    const adapter = {
+      whoami: vi.fn(async () => ({ id: 'me-1', username: 'kwf-bot' })),
+      listOwnInProgressItems: vi.fn(async () => [
+        { id: 'A2', updatedAt: new Date('2026-03-10T01:00:00.000Z') },
+        { id: 'A1', updatedAt: new Date('2026-03-10T00:00:00.000Z') },
+      ]),
+      listIdsByStage: vi.fn(async () => {
+        throw new Error('should not be called');
+      }),
+      getWorkItem: vi.fn(async (id: string) => ({
+        id,
+        title: id === 'A1' ? 'Older task' : 'Newest task',
+        stage: 'stage:in-progress' as const,
+        assignees: [{ id: 'me-1' }],
+        updatedAt: new Date(id === 'A1' ? '2026-03-10T00:00:00.000Z' : '2026-03-10T01:00:00.000Z'),
+        labels: [],
+      })),
+      setStage: vi.fn(async () => undefined),
+      listBacklogIdsInOrder: vi.fn(async () => []),
+      listComments: vi.fn(async () => []),
+      listAttachments: vi.fn(async () => []),
+      listLinkedWorkItems: vi.fn(async () => []),
+      name: vi.fn(() => 'plane'),
+    };
+
+    const output = await runWorkflowLoopSelection({
+      adapter,
+      map: { version: 1, sessionsByTicket: {} },
+      dryRun: false,
+    });
+
+    expect(output.tick).toEqual({ kind: 'in_progress', id: 'A2', inProgressIds: ['A2'] });
+    expect(adapter.listOwnInProgressItems).toHaveBeenCalledTimes(1);
+    expect(adapter.getWorkItem).toHaveBeenCalledTimes(1);
+    expect(adapter.getWorkItem).toHaveBeenCalledWith('A2');
+    expect(adapter.setStage).toHaveBeenCalledWith('A1', 'stage:todo');
+  });
+
   it('uses adapter-provided backlog summaries to avoid per-ticket work item reads', async () => {
     const adapter = {
       whoami: vi.fn(async () => ({ id: 'me-1', username: 'kwf-bot' })),

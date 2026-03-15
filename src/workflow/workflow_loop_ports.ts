@@ -53,6 +53,7 @@ export type WorkflowHousekeepingAdapter = {
 export type WorkflowLoopSelectionAdapter = {
   name(): string;
   whoami(): Promise<{ id?: string; username?: string; name?: string }>;
+  listOwnInProgressItems?(): Promise<Array<{ id: string; updatedAt?: Date }>>;
   listIdsByStage(stage: StageKey): Promise<string[]>;
   listBacklogIdsInOrder(): Promise<string[]>;
   listStageItems?(stage: StageKey): Promise<WorkItemDetails[]>;
