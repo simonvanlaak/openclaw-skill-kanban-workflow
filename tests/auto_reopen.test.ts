@@ -199,7 +199,7 @@ describe('auto-reopen on human comment', () => {
     await fs.rm(path, { force: true });
   });
 
-  test('moves done ticket back to backlog when a non-worker comment appears', async () => {
+  test('does not move done tickets back to backlog when a non-worker comment appears', async () => {
     const path = cursorPath('kwf-auto-reopen-done');
     const adapter = {
       whoami: vi.fn(async () => ({ id: 'kwf-user-1', username: 'kwf-bot' })),
@@ -218,10 +218,8 @@ describe('auto-reopen on human comment', () => {
 
     const res = await runAutoReopenOnHumanComment({ adapter, cursorPath: path });
 
-    expect(res.actions).toEqual([
-      { ticketId: 'DN-4', fromStage: 'state:done', toStage: 'stage:todo', triggerCommentId: 'c-human-4' },
-    ]);
-    expect(adapter.setStage).toHaveBeenCalledWith('DN-4', 'stage:todo');
+    expect(res.actions).toEqual([]);
+    expect(adapter.setStage).not.toHaveBeenCalled();
 
     await fs.rm(path, { force: true });
   });

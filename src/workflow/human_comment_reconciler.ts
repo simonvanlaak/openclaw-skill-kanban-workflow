@@ -19,10 +19,10 @@ export type HumanCommentReconcileResult =
         humanCommentReconcile: {
           ticketId: string;
           commentId?: string;
-          fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done';
+          fromStage: 'stage:blocked' | 'stage:in-review';
           actions: Array<{
             ticketId: string;
-            fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done';
+            fromStage: 'stage:blocked' | 'stage:in-review';
             toStage: StageKey;
             triggerCommentId: string;
           }>;
@@ -33,7 +33,6 @@ export type HumanCommentReconcileResult =
 
 type ReconcileAdapter = {
   getWorkItem(id: string): Promise<{ stage: StageKey }>;
-  listIdsInDoneState?(): Promise<string[]>;
   whoami(): Promise<{ id?: string; username?: string; name?: string }>;
   listComments(
     id: string,
@@ -45,16 +44,10 @@ type ReconcileAdapter = {
 async function resolveFromStage(
   adapter: ReconcileAdapter,
   ticketId: string,
-): Promise<'stage:blocked' | 'stage:in-review' | 'state:done' | null> {
+): Promise<'stage:blocked' | 'stage:in-review' | null> {
   const item = await adapter.getWorkItem(ticketId);
   if (item.stage === 'stage:blocked' || item.stage === 'stage:in-review') {
     return item.stage;
-  }
-  if (typeof adapter.listIdsInDoneState === 'function') {
-    const doneIds = await adapter.listIdsInDoneState();
-    if (doneIds.includes(ticketId)) {
-      return 'state:done';
-    }
   }
   return null;
 }

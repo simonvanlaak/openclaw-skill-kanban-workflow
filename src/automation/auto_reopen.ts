@@ -36,7 +36,7 @@ type SingleTicketAutoReopenPort = Pick<AutoReopenPort, 'whoami' | 'listComments'
 
 export type AutoReopenAction = {
   ticketId: string;
-  fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done';
+  fromStage: 'stage:blocked' | 'stage:in-review';
   toStage: StageKey;
   triggerCommentId: string;
 };
@@ -167,7 +167,7 @@ function findAutoReopenTrigger(params: {
 export async function runAutoReopenForTicket(opts: {
   adapter: SingleTicketAutoReopenPort;
   ticketId: string;
-  fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done';
+  fromStage: 'stage:blocked' | 'stage:in-review';
   map?: SessionMap;
   dryRun?: boolean;
   cursorPath?: string;
@@ -292,12 +292,9 @@ export async function runAutoReopenOnHumanComment(opts: {
   const watchedStages: Array<'stage:blocked' | 'stage:in-review'> = ['stage:blocked', 'stage:in-review'];
   const actions: AutoReopenAction[] = [];
 
-  const watchedBuckets: Array<{ fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done'; ids: string[] }> = [];
+  const watchedBuckets: Array<{ fromStage: 'stage:blocked' | 'stage:in-review'; ids: string[] }> = [];
   for (const stage of watchedStages) {
     watchedBuckets.push({ fromStage: stage, ids: await opts.adapter.listIdsByStage(stage) });
-  }
-  if (typeof opts.adapter.listIdsInDoneState === 'function') {
-    watchedBuckets.push({ fromStage: 'state:done', ids: await opts.adapter.listIdsInDoneState() });
   }
 
   for (const { fromStage: stage, ids } of watchedBuckets) {
