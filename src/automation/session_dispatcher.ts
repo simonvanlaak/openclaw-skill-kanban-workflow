@@ -50,6 +50,12 @@ export type SessionEntry = {
         createdAt: string;
         stageAppliedAt?: string;
       }
+    | {
+        kind: 'ticket_reservation';
+        targetStage: 'stage:in-progress';
+        createdAt: string;
+        stageAppliedAt?: string;
+      }
   );
 };
 
@@ -305,7 +311,7 @@ export function makeSessionLabel(sessionDisplayId: string, ticketTitle?: string)
   return cleanTitle ? `${sessionDisplayId} ${cleanTitle}` : sessionDisplayId;
 }
 
-function ensureSessionForTicket(
+export function ensureSessionForTicket(
   map: SessionMap,
   ticketId: string,
   nowIso: string,
@@ -434,6 +440,9 @@ export function markSessionInProgress(
   entry.lastSeenAt = nowIso;
   if (!entry.workStartedAt) {
     entry.workStartedAt = nowIso;
+  }
+  if (entry.pendingMutation?.kind === 'ticket_reservation') {
+    delete entry.pendingMutation;
   }
   map.active = { ticketId, sessionId: entry.sessionId };
   return map;

@@ -1,5 +1,8 @@
 import { runAutoReopenOnHumanComment } from '../automation/auto_reopen.js';
-import type { SessionMap } from '../automation/session_dispatcher.js';
+import {
+  ensureSessionForTicket,
+  type SessionMap,
+} from '../automation/session_dispatcher.js';
 import type { StageKey } from '../stage.js';
 import { currentActiveSession } from './workflow_state.js';
 import {
@@ -135,6 +138,45 @@ async function findPotentialDuplicates(
   return scored.slice(0, maxResults);
 }
 
+async function reserveBacklogTicket(params: {
+  adapter: Pick<WorkflowLoopSelectionAdapter, 'setStage'>;
+  map: SessionMap;
+  ticketId: string;
+  ticketTitle?: string;
+  identifier?: string;
+  persistMap?: (map: SessionMap) => Promise<void>;
+}): Promise<void> {
+  const nowIso = new Date().toISOString();
+  ensureSessionForTicket(
+    params.map,
+    params.ticketId,
+    nowIso,
+    params.ticketTitle,
+    params.identifier,
+  );
+
+  const entry = params.map.sessionsByTicket[params.ticketId];
+  const pending = entry?.pendingMutation;
+  const reusePending = pending?.kind === 'ticket_reservation' && pending.targetStage === 'stage:in-progress';
+  if (entry && !reusePending) {
+    entry.pendingMutation = {
+      kind: 'ticket_reservation',
+      targetStage: 'stage:in-progress',
+      createdAt: nowIso,
+    };
+    await params.persistMap?.(params.map);
+  }
+
+  const currentPending = params.map.sessionsByTicket[params.ticketId]?.pendingMutation;
+  if (currentPending?.kind === 'ticket_reservation' && !currentPending.stageAppliedAt) {
+    await params.adapter.setStage(params.ticketId, 'stage:in-progress');
+    currentPending.stageAppliedAt = new Date().toISOString();
+    await params.persistMap?.(params.map);
+  } else if (!currentPending || currentPending.kind !== 'ticket_reservation') {
+    await params.adapter.setStage(params.ticketId, 'stage:in-progress');
+  }
+}
+
 export async function runWorkflowLoopSelection(params: {
   adapter: WorkflowLoopSelectionAdapter;
   map: SessionMap;
@@ -209,7 +251,14 @@ export async function runWorkflowLoopSelection(params: {
     const item = await params.adapter.getWorkItem(id);
     if (!isAssignedToSelf(item.assignees, me)) continue;
     if (!params.dryRun) {
-      await params.adapter.setStage(id, 'stage:in-progress');
+      await reserveBacklogTicket({
+        adapter: params.adapter,
+        map: params.map,
+        ticketId: id,
+        ticketTitle: item.title,
+        identifier: item.identifier,
+        persistMap: params.persistMap,
+      });
     }
     const payload = await showTicket(params.adapter, id);
     const potentialDuplicates = await findPotentialDuplicates(

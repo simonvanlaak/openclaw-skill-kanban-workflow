@@ -120,9 +120,13 @@ describe('workflow-loop reservation persistence', () => {
 
     expect(code).toBe(1);
     expect(cap.err.join('')).toContain('gateway unavailable');
-    expect(saveSessionMap).toHaveBeenCalledTimes(1);
+    expect(saveSessionMap.mock.calls.length).toBeGreaterThanOrEqual(1);
     const persistedMap = (saveSessionMap.mock.calls[0] as any)?.[0];
     expect(persistedMap?.active).toEqual({ ticketId: 'A1', sessionId: 'a1' });
     expect(persistedMap?.sessionsByTicket?.A1?.lastState).toBe('reserved');
+    expect(persistedMap?.sessionsByTicket?.A1?.pendingMutation).toMatchObject({
+      kind: 'ticket_reservation',
+      targetStage: 'stage:in-progress',
+    });
   });
 });
