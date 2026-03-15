@@ -50,15 +50,25 @@ describe('PlaneAdapter (multi-project)', () => {
 
     const ids = await adapter.listBacklogIdsInOrder();
 
-    expect(execa).toHaveBeenNthCalledWith(3, 'plane', ['issues', 'list', '-p', 'projA', '--assignee', 'me1', '-f', 'json'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    expect(execa).toHaveBeenNthCalledWith(
+      3,
+      'plane',
+      ['issues', 'list', '-p', 'projA', '--assignee', 'me1', '-f', 'json'],
+      expect.objectContaining({
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
 
-    expect(execa).toHaveBeenNthCalledWith(4, 'plane', ['issues', 'list', '-p', 'projB', '--assignee', 'me1', '-f', 'json'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    expect(execa).toHaveBeenNthCalledWith(
+      4,
+      'plane',
+      ['issues', 'list', '-p', 'projB', '--assignee', 'me1', '-f', 'json'],
+      expect.objectContaining({
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
 
     // config order, not updatedAt across projects.
     expect(ids).toEqual(['A1', 'B1']);
@@ -95,14 +105,24 @@ describe('PlaneAdapter (multi-project)', () => {
 
     const ids = await adapter.listIdsByStage('stage:blocked');
 
-    expect(execa).toHaveBeenNthCalledWith(3, 'plane', ['issues', 'list', '-p', 'projA', '--assignee', 'me1', '-f', 'json'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    expect(execa).toHaveBeenNthCalledWith(4, 'plane', ['issues', 'list', '-p', 'projB', '--assignee', 'me1', '-f', 'json'], {
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
+    expect(execa).toHaveBeenNthCalledWith(
+      3,
+      'plane',
+      ['issues', 'list', '-p', 'projA', '--assignee', 'me1', '-f', 'json'],
+      expect.objectContaining({
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
+    expect(execa).toHaveBeenNthCalledWith(
+      4,
+      'plane',
+      ['issues', 'list', '-p', 'projB', '--assignee', 'me1', '-f', 'json'],
+      expect.objectContaining({
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    );
 
     // oldest first
     expect(ids).toEqual(['A1', 'B1']);

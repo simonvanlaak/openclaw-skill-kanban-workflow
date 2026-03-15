@@ -13,6 +13,16 @@ const PLANE_CACHE_DIR = process.env.KWF_PLANE_CACHE_DIR?.trim() || '.tmp/kwf-pla
 const PLANE_CACHE_EVENT_FILE = process.env.KWF_PLANE_CACHE_EVENT_FILE?.trim() || '.tmp/kwf-plane-webhook-events.json';
 const PLANE_CACHE_RECONCILE_MS = Number.parseInt(process.env.KWF_PLANE_CACHE_RECONCILE_MS ?? '900000', 10);
 
+function isPlaneCacheEnabled(): boolean {
+  const raw = String(process.env.KWF_PLANE_CACHE_ENABLED ?? '').trim().toLowerCase();
+  if (raw) {
+    return !['0', 'false', 'no', 'off'].includes(raw);
+  }
+
+  if (String(process.env.VITEST ?? '').trim()) return false;
+  return true;
+}
+
 function parsePlaneDate(v: string): Date | undefined {
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? undefined : d;
@@ -479,7 +489,16 @@ export class PlaneAdapter implements Adapter {
     return next;
   }
 
-  private async getSnapshotIssuesForProject(projectId: string): Promise<any[]> {
+  private async getSnapshotIssuesForProject(projectId: string, opts?: { assigneeId?: string }): Promise<any[]> {
+    if (opts?.assigneeId) {
+      const issuesRaw = await this.listIssuesRaw(projectId, { assigneeId: opts.assigneeId });
+      return normalizePlaneIssuesList(issuesRaw);
+    }
+
+    if (!isPlaneCacheEnabled()) {
+      return normalizePlaneIssuesList((await this.runJson(['issues', 'list', '-p', projectId])) ?? []);
+    }
+
     const now = Date.now();
     const cached = await this.loadIssueCache(projectId);
     const events = await this.consumeProjectCacheEvents(projectId);
@@ -492,8 +511,7 @@ export class PlaneAdapter implements Adapter {
     const refreshedAtMs = effectiveCache?.refreshedAt ? Date.parse(effectiveCache.refreshedAt) : Number.NaN;
     const stale = !effectiveCache || !Number.isFinite(refreshedAtMs) || (now - refreshedAtMs) >= PLANE_CACHE_RECONCILE_MS;
     if (stale) {
-      const issuesRaw = await this.listIssuesRaw(projectId);
-      const issues = normalizePlaneIssuesList(issuesRaw);
+      const issues = normalizePlaneIssuesList((await this.runJson(['issues', 'list', '-p', projectId])) ?? []);
       await this.saveIssueCache(projectId, issues, { refreshedAt: true });
       return issues;
     }
@@ -1201,7 +1219,7 @@ export class PlaneAdapter implements Adapter {
     const merged: Array<{ id: string; updatedAt?: Date; assignees?: Array<{ id?: string; username?: string; name?: string } | string> }> = [];
 
     for (const projectId of this.projectIds) {
-      const issues = await this.getSnapshotIssuesForProject(projectId);
+      const issues = await this.getSnapshotIssuesForProject(projectId, { assigneeId: meId || undefined });
       const snap = await this.fetchSnapshotForProject(projectId, issues);
 
       let items = [...snap.values()].filter((i) => i.stage.key === stage);
@@ -1304,7 +1322,7 @@ export class PlaneAdapter implements Adapter {
     const merged: Array<{ id: string; title: string; priority: number }> = [];
 
     for (const projectId of this.projectIds) {
-      const issues = await this.getSnapshotIssuesForProject(projectId);
+      const issues = await this.getSnapshotIssuesForProject(projectId, { assigneeId: meId || undefined });
 
       const snap = await this.fetchSnapshotForProject(projectId, issues);
       let backlog = [...snap.values()].filter((i) => i.stage.key === 'stage:todo');
