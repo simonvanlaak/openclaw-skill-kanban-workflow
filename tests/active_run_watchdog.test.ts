@@ -97,7 +97,7 @@ describe('active_run_watchdog', () => {
         delegationDir: '.tmp/test-delegations',
         defaultSyncTimeoutMs: 30_000,
         defaultBackgroundTimeoutMs: 60_000,
-        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
         isBackgroundDelegationAllowed: () => false,
       },
     });
@@ -160,7 +160,7 @@ describe('active_run_watchdog', () => {
         delegationDir: '.tmp/test-delegations',
         defaultSyncTimeoutMs: 30_000,
         defaultBackgroundTimeoutMs: 60_000,
-        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
         isBackgroundDelegationAllowed: () => false,
       },
       now: new Date('2026-03-15T21:30:00.000Z'),

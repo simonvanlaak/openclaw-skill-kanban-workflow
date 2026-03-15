@@ -81,7 +81,7 @@ describe('subagent_completion_reconciler', () => {
         delegationDir: '.tmp/test-delegations',
         defaultSyncTimeoutMs: 30_000,
         defaultBackgroundTimeoutMs: 60_000,
-        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
         isBackgroundDelegationAllowed: () => false,
       },
     });
@@ -105,7 +105,7 @@ describe('subagent_completion_reconciler', () => {
         delegationDir: '.tmp/test-delegations',
         defaultSyncTimeoutMs: 30_000,
         defaultBackgroundTimeoutMs: 60_000,
-        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
         isBackgroundDelegationAllowed: () => false,
       },
     });
@@ -156,7 +156,7 @@ describe('subagent_completion_reconciler', () => {
         delegationDir: '.tmp/test-delegations',
         defaultSyncTimeoutMs: 30_000,
         defaultBackgroundTimeoutMs: 60_000,
-        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+        requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
         isBackgroundDelegationAllowed: () => false,
       },
     });

@@ -644,7 +644,8 @@ export async function dispatchWorkerTurn(
     resolvePositiveInt(process.env.KWF_WORKER_RUN_TIMEOUT_MS, 60 * 60 * 1000),
   );
   const requestId = String(params.idempotencyKey ?? '').trim() || randomUUID();
-  const requesterSessionKey = opts.requesterSessionKey ?? 'agent:kanban-workflow-workflow-loop:main';
+  const requesterSessionKey =
+    opts.requesterSessionKey ?? 'agent:kanban-workflow-workflow-loop:kwf-control';
   const sendResponse = await gatewayCallWithRetry({
     method: 'sessions_spawn',
     rpcParams: {

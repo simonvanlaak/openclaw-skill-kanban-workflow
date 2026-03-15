@@ -5,7 +5,7 @@ const workerRuntimeOpts = (delegationDir: string) => ({
   defaultSyncTimeoutMs: 30_000,
   defaultBackgroundTimeoutMs: 15 * 60_000,
   isBackgroundDelegationAllowed: () => false,
-  requesterSessionKey: 'agent:kanban-workflow-workflow-loop:main',
+  requesterSessionKey: 'agent:kanban-workflow-workflow-loop:kwf-control',
 });
 
 afterEach(() => {
