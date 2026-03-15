@@ -4,6 +4,8 @@ const {
   loadSessionMap,
   saveSessionMap,
   loadWorkerDelegationState,
+  runWorkflowLoopSelection,
+  runWorkflowLoopController,
 } = vi.hoisted(() => ({
   loadSessionMap: vi.fn(async () => ({
     version: 1 as const,
@@ -42,6 +44,42 @@ const {
     },
     routing: { sessionKey: 'agent:kanban-workflow-worker:jules-281', sessionId: 'jules-281' },
   })),
+  runWorkflowLoopSelection: vi.fn(async () => ({
+    tick: { kind: 'started' as const, id: 'B1', reasonCode: 'start_next_assigned_backlog' },
+    nextTicket: {
+      item: {
+        id: 'B1',
+        title: 'Next ticket',
+      },
+      comments: [],
+    },
+    dryRun: false,
+  })),
+  runWorkflowLoopController: vi.fn(async () => ({
+    quiet: false as const,
+    exitCode: 0,
+    payload: {
+      workflowLoop: {
+        dryRun: false,
+        dispatchRunId: 'dispatch-2:handoff',
+        actions: [],
+        execution: [],
+        noWorkAlert: null,
+        queuePositionUpdate: null,
+        rocketChatStatusUpdate: null,
+        activeTicketId: 'B1',
+        mapPath: '.tmp/kwf-session-map.json',
+      },
+      autopilot: {
+        tick: { kind: 'started' as const, id: 'B1', reasonCode: 'start_next_assigned_backlog' },
+        nextTicket: {
+          item: { id: 'B1', title: 'Next ticket' },
+          comments: [],
+        },
+        dryRun: false,
+      },
+    },
+  })),
 }));
 
 vi.mock('../src/automation/session_dispatcher.js', async () => {
@@ -61,6 +99,14 @@ vi.mock('../src/workflow/worker_runtime.js', async () => {
   };
 });
 
+vi.mock('../src/workflow/workflow_loop_selection.js', () => ({
+  runWorkflowLoopSelection,
+}));
+
+vi.mock('../src/workflow/workflow_loop_controller.js', () => ({
+  runWorkflowLoopController,
+}));
+
 import { runDelegationReconciler } from '../src/workflow/delegation_reconciler.js';
 
 describe('delegation_reconciler', () => {
@@ -68,7 +114,7 @@ describe('delegation_reconciler', () => {
     vi.clearAllMocks();
   });
 
-  it('applies a completed delegation immediately and persists the completed session state', async () => {
+  it('applies a completed delegation immediately, persists the completed session state, and starts the next ticket handoff', async () => {
     const adapter = {
       getWorkItem: vi.fn(async () => ({ id: 'A1', projectId: 'P1' })),
       addComment: vi.fn(async () => undefined),
@@ -101,5 +147,8 @@ describe('delegation_reconciler', () => {
     expect(persistedMap.active).toBeUndefined();
     expect(persistedMap.sessionsByTicket.A1.lastState).toBe('completed');
     expect(result.payload.delegationReconcile.execution.detail).toContain('source=background-delegation-event');
+    expect(runWorkflowLoopSelection).toHaveBeenCalledTimes(1);
+    expect(runWorkflowLoopController).toHaveBeenCalledTimes(1);
+    expect(result.payload.delegationReconcile.handoff).not.toBeNull();
   });
 });

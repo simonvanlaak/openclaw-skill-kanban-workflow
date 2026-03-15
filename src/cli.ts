@@ -444,6 +444,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         dispatchRunId: randomUUID(),
         workerAgentId: WORKER_AGENT_ID,
         workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,
+        requeueTargetStage,
       });
 
       if (!result.quiet) {

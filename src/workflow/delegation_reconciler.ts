@@ -3,11 +3,14 @@ import {
   saveSessionMap,
   type SessionMap,
 } from '../automation/session_dispatcher.js';
+import type { StageKey } from '../stage.js';
 import {
   loadWorkerDelegationState,
   type WorkerRuntimeOptions,
 } from './worker_runtime.js';
 import { applyWorkerOutputToTicket, type WorkerExecutionOutcome } from './worker_output_applier.js';
+import { runWorkflowLoopSelection } from './workflow_loop_selection.js';
+import { runWorkflowLoopController, type WorkflowLoopControllerResult } from './workflow_loop_controller.js';
 import type { WorkflowLifecycleAdapter } from './workflow_loop_ports.js';
 
 export type DelegationReconcileResult =
@@ -19,15 +22,16 @@ export type DelegationReconcileResult =
   | {
       quiet: false;
       exitCode: number;
-      payload: {
-        delegationReconcile: {
-          ticketId: string;
-          sessionId: string;
-          execution: WorkerExecutionOutcome;
-          mapPath: string;
-        };
+    payload: {
+      delegationReconcile: {
+        ticketId: string;
+        sessionId: string;
+        execution: WorkerExecutionOutcome;
+        handoff: WorkflowLoopControllerResult | null;
+        mapPath: string;
       };
     };
+  };
 
 type AdapterLike = WorkflowLifecycleAdapter & {
   getWorkItem?(ticketId: string): Promise<any>;
@@ -35,6 +39,13 @@ type AdapterLike = WorkflowLifecycleAdapter & {
 
 function cloneMap(map: SessionMap): SessionMap {
   return JSON.parse(JSON.stringify(map)) as SessionMap;
+}
+
+function shouldAttemptImmediateHandoff(execution: WorkerExecutionOutcome, map: SessionMap): boolean {
+  if (execution.outcome !== 'applied') return false;
+  if (!execution.parsed) return false;
+  if (map.active) return false;
+  return execution.parsed.kind === 'completed' || execution.parsed.kind === 'blocked' || execution.parsed.kind === 'uncertain';
 }
 
 function ensureActiveDelegationSession(map: SessionMap, ticketId: string, sessionId: string, nowIso: string): void {
@@ -80,6 +91,7 @@ export async function runDelegationReconciler(params: {
   dispatchRunId: string;
   workerAgentId: string;
   workerRuntimeOptions: WorkerRuntimeOptions;
+  requeueTargetStage?: StageKey;
   mapPath?: string;
 }): Promise<DelegationReconcileResult> {
   const delegationState = await loadWorkerDelegationState(
@@ -122,6 +134,30 @@ export async function runDelegationReconciler(params: {
     persistMap: async (nextMap) => saveSessionMap(nextMap, params.mapPath),
   });
 
+  let handoff: WorkflowLoopControllerResult | null = null;
+  if (shouldAttemptImmediateHandoff(execution, map)) {
+    const handoffPreviousMap = cloneMap(map);
+    const handoffOutput = await runWorkflowLoopSelection({
+      adapter: params.adapter as any,
+      map,
+      dryRun: false,
+      requeueTargetStage: params.requeueTargetStage,
+      workerRuntimeOptions: params.workerRuntimeOptions,
+      persistMap: async (nextMap) => saveSessionMap(nextMap, params.mapPath),
+    });
+
+    handoff = await runWorkflowLoopController({
+      adapter: params.adapter as any,
+      output: handoffOutput,
+      previousMap: handoffPreviousMap,
+      dryRun: false,
+      dispatchRunId: `${params.dispatchRunId}:handoff`,
+      workerAgentId: params.workerAgentId,
+      workerRuntimeOptions: params.workerRuntimeOptions,
+      mapPath: params.mapPath,
+    });
+  }
+
   return {
     quiet: false,
     exitCode: 0,
@@ -130,6 +166,7 @@ export async function runDelegationReconciler(params: {
         ticketId: params.ticketId,
         sessionId: params.sessionId,
         execution,
+        handoff,
         mapPath: params.mapPath ?? '.tmp/kwf-session-map.json',
       },
     },
