@@ -177,6 +177,81 @@ describe('PlaneAdapter', () => {
     expect(calls).toContainEqual(['-f', 'json', 'states', '-p', projectId]);
   });
 
+  it('client-filters backlog selection when Plane CLI ignores state and assignee filters', async () => {
+    const projectId = `proj-backlog-filter-${Date.now()}`;
+
+    (execa as any as ExecaMock)
+      // whoami
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ id: 'me-1', email: 'me@example.com', display_name: 'Me' }),
+      })
+      // whoami sanity check projects list
+      .mockResolvedValueOnce({ stdout: JSON.stringify([]) })
+      // states lookup to resolve todo state id
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            { id: 'state-todo-1', name: 'Todo' },
+            { id: 'state-review-1', name: 'In Review' },
+          ],
+        }),
+      })
+      // broken Plane CLI response: ignores both --state and --assignee
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          results: [
+            {
+              id: 'todo-mine',
+              name: 'Mine',
+              priority: 'high',
+              state: { id: 'state-todo-1', name: 'Todo' },
+              assignees: [{ id: 'me-1' }],
+            },
+            {
+              id: 'todo-other',
+              name: 'Other person',
+              priority: 'urgent',
+              state: { id: 'state-todo-1', name: 'Todo' },
+              assignees: [{ id: 'someone-else' }],
+            },
+            {
+              id: 'review-mine',
+              name: 'Wrong state',
+              priority: 'urgent',
+              state: { id: 'state-review-1', name: 'In Review' },
+              assignees: [{ id: 'me-1' }],
+            },
+          ],
+        }),
+      });
+
+    const adapter = new PlaneAdapter({
+      workspaceSlug: 'ws',
+      projectId,
+      stageMap: {
+        Todo: 'stage:todo',
+        'In Review': 'stage:in-review',
+      },
+    });
+
+    const ids = await adapter.listBacklogIdsInOrder();
+
+    expect(ids).toEqual(['todo-mine']);
+    const calls = (execa as any).mock.calls.map((c: any) => c[1]);
+    expect(calls).toContainEqual([
+      'issues',
+      'list',
+      '-p',
+      projectId,
+      '--state',
+      'state-todo-1',
+      '--assignee',
+      'me-1',
+      '-f',
+      'json',
+    ]);
+  });
+
   it('reconciles creator assignments for unassigned issues in mapped stages', async () => {
     (execa as any as ExecaMock)
       // issues list

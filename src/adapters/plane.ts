@@ -263,6 +263,12 @@ function extractIssueStateId(raw: unknown): string | undefined {
   return undefined;
 }
 
+function stateNameMatches(left: string | undefined, right: string | undefined): boolean {
+  const a = String(left ?? '').trim().toLowerCase();
+  const b = String(right ?? '').trim().toLowerCase();
+  return a.length > 0 && a === b;
+}
+
 function extractIssueBody(raw: unknown): string | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const issue: any = raw;
@@ -572,11 +578,11 @@ export class PlaneAdapter implements Adapter {
 
   private async getSnapshotIssuesForProject(projectId: string, opts?: { assigneeId?: string; stateId?: string }): Promise<any[]> {
     if (opts?.assigneeId || opts?.stateId) {
-      const issuesRaw = await this.listIssuesRaw(projectId, {
+      const issues = normalizePlaneIssuesList(await this.listIssuesRaw(projectId, {
         assigneeId: opts?.assigneeId,
         stateId: opts?.stateId,
-      });
-      return normalizePlaneIssuesList(issuesRaw);
+      }));
+      return await this.filterIssuesClientSide(projectId, issues, opts);
     }
 
     if (!isPlaneCacheEnabled()) {
@@ -1410,6 +1416,40 @@ export class PlaneAdapter implements Adapter {
     if (opts?.assigneeId) args.push('--assignee', opts.assigneeId);
     const out = await this.cli.run([...this.baseArgs, ...args, ...this.formatArgs]);
     return out.trim().length > 0 ? JSON.parse(out) : [];
+  }
+
+  private async filterIssuesClientSide(
+    projectId: string,
+    issues: any[],
+    opts?: { assigneeId?: string; stateId?: string },
+  ): Promise<any[]> {
+    if (!opts?.assigneeId && !opts?.stateId) return issues;
+
+    let expectedStateName: string | undefined;
+    if (opts?.stateId) {
+      const states = await this.fetchStatesForProject(projectId).catch(() => []);
+      expectedStateName = states.find((state) => state.id === opts.stateId)?.name;
+    }
+
+    return issues.filter((issue) => {
+      if (opts?.stateId) {
+        const issueStateId = extractIssueStateId(issue);
+        const issueStateName = extractIssueStageName(issue);
+        const matchesState =
+          (issueStateId && issueStateId === opts.stateId)
+          || (!issueStateId && stateNameMatches(issueStateName, expectedStateName));
+        if (!matchesState) return false;
+      }
+
+      if (opts?.assigneeId) {
+        const assigneeIds = extractIssueAssigneeIds(issue);
+        if (assigneeIds.length > 0 && !assigneeIds.includes(opts.assigneeId)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
   }
 
   async reconcileAssignments(): Promise<void> {
