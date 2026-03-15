@@ -11,6 +11,7 @@ import {
   applyWorkerCommandToSessionMap,
   buildWorkflowLoopPlan,
   loadSessionMap,
+  markSessionInProgress,
   saveSessionMap,
   type WorkerCommandResult,
 } from './automation/session_dispatcher.js';
@@ -666,6 +667,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           }, WORKER_RUNTIME_OPTIONS);
 
           if (retry.kind === 'delegated') {
+            markSessionInProgress(plan.map, action.ticketId, new Date());
             execution.push({
               sessionId: action.sessionId,
               ticketId: action.ticketId,
@@ -762,6 +764,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
       };
 
       if (!dryRun) {
+        if (plan.actions.some((action) => action.kind === 'work')) {
+          await saveSessionMap(plan.map);
+        }
+
         for (const action of plan.actions) {
           const effectiveAgent = WORKER_AGENT_ID;
           const effectiveThinking = 'high';
@@ -769,6 +775,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           if (action.kind === 'work') {
             const delegationState = await loadWorkerDelegationState(action.sessionId, action.ticketId, WORKER_RUNTIME_OPTIONS);
             if (delegationState.kind === 'running') {
+              markSessionInProgress(plan.map, action.ticketId, new Date());
               execution.push({
                 sessionId: action.sessionId,
                 ticketId: action.ticketId,
@@ -807,6 +814,7 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
           }
 
           if (dispatched.kind === 'delegated') {
+            markSessionInProgress(plan.map, action.ticketId, new Date());
             // IMPORTANT: Do not write delegation timeout notices back to the ticket.
             // They are human-facing runtime artifacts and become spam when posted as comments.
             // The workflow-loop will pick up the background result on a later cron turn.

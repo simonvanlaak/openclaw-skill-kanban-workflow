@@ -25,7 +25,7 @@ function loadWorkerAgentGuide(): string | null {
 export type SessionEntry = {
   sessionId: string;
   sessionLabel?: string;
-  lastState: 'in_progress' | 'blocked' | 'completed' | 'no_work';
+  lastState: 'reserved' | 'in_progress' | 'blocked' | 'completed' | 'no_work';
   lastSeenAt: string;
   workStartedAt?: string;
   closedAt?: string;
@@ -333,9 +333,9 @@ function ensureSessionForTicket(
       existing.sessionId = sessionId;
     }
 
-    existing.lastState = 'in_progress';
+    existing.lastState = previousState === 'in_progress' ? 'in_progress' : 'reserved';
     existing.lastSeenAt = nowIso;
-    if (previousState !== 'in_progress' || !existing.workStartedAt) {
+    if (!((previousState === 'in_progress' || previousState === 'reserved') && existing.workStartedAt)) {
       existing.workStartedAt = nowIso;
     }
     existing.sessionLabel = sessionLabel;
@@ -372,7 +372,7 @@ function ensureSessionForTicket(
     if (activeEntry) {
       activeEntry.sessionLabel = sessionLabel;
       activeEntry.sessionId = resolvedActiveSessionId;
-      activeEntry.lastState = 'in_progress';
+      activeEntry.lastState = activeEntry.lastState === 'in_progress' ? 'in_progress' : 'reserved';
       activeEntry.lastSeenAt = nowIso;
       if (!activeEntry.workStartedAt) activeEntry.workStartedAt = nowIso;
       return { sessionId: resolvedActiveSessionId, sessionLabel, reused: !shouldUpgradeActiveId };
@@ -381,7 +381,7 @@ function ensureSessionForTicket(
     map.sessionsByTicket[ticketId] = {
       sessionId: resolvedActiveSessionId,
       sessionLabel,
-      lastState: 'in_progress',
+      lastState: 'reserved',
       lastSeenAt: nowIso,
       workStartedAt: nowIso,
     };
@@ -392,12 +392,30 @@ function ensureSessionForTicket(
   map.sessionsByTicket[ticketId] = {
     sessionId,
     sessionLabel,
-    lastState: 'in_progress',
+    lastState: 'reserved',
     lastSeenAt: nowIso,
     workStartedAt: nowIso,
   };
   map.active = { ticketId, sessionId };
   return { sessionId, sessionLabel, reused: false };
+}
+
+export function markSessionInProgress(
+  map: SessionMap,
+  ticketId: string,
+  now: Date,
+): SessionMap {
+  const entry = map.sessionsByTicket[ticketId];
+  if (!entry) return map;
+
+  const nowIso = now.toISOString();
+  entry.lastState = 'in_progress';
+  entry.lastSeenAt = nowIso;
+  if (!entry.workStartedAt) {
+    entry.workStartedAt = nowIso;
+  }
+  map.active = { ticketId, sessionId: entry.sessionId };
+  return map;
 }
 
 function finalizeTicket(map: SessionMap, ticketId: string, state: 'blocked' | 'completed', nowIso: string): SessionEntry | null {

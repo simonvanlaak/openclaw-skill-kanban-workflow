@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { applyWorkerCommandToSessionMap, buildWorkflowLoopPlan } from '../src/automation/session_dispatcher.js';
+import {
+  applyWorkerCommandToSessionMap,
+  buildWorkflowLoopPlan,
+  markSessionInProgress,
+} from '../src/automation/session_dispatcher.js';
 
 describe('session workflow-loop', () => {
   it('reuses same session for same in_progress ticket, then starts a new session on completion', () => {
@@ -36,6 +40,7 @@ describe('session workflow-loop', () => {
     expect(first.actions).toHaveLength(1);
     expect(first.actions[0]?.kind).toBe('work');
     expect(first.actions[0]?.sessionLabel).toBe('A1 Fix login race');
+    expect(first.map.sessionsByTicket.A1?.lastState).toBe('reserved');
     expect(first.actions[0]?.text).toContain('Ticket: A1 (A1)');
     expect(first.actions[0]?.text).toContain('Session label: A1 Fix login race');
     expect(first.actions[0]?.text).toContain('WORKER_AGENT_MD (mandatory instructions loaded at task start):');
@@ -55,7 +60,7 @@ describe('session workflow-loop', () => {
     const a1Session = first.actions[0]!.sessionId;
 
     const second = buildWorkflowLoopPlan({
-      previousMap: first.map,
+      previousMap: markSessionInProgress(structuredClone(first.map), 'A1', new Date('2026-02-28T13:01:00.000Z')),
       now: new Date('2026-02-28T13:05:00.000Z'),
       autopilotOutput: {
         tick: { kind: 'in_progress', id: 'A1', inProgressIds: ['A1'] },
@@ -63,6 +68,7 @@ describe('session workflow-loop', () => {
     });
 
     expect(second.actions[0]?.sessionId).toBe(a1Session);
+    expect(second.map.sessionsByTicket.A1?.lastState).toBe('in_progress');
     expect(second.actions[0]?.text).toContain('VERIFICATION_HARNESS (mandatory before completed/in-review):');
     expect(second.actions[0]?.text).toContain('decision="blocked" with the exact missing dependency');
     expect(second.actions[0]?.text).toContain('verification_primitives.sh {http-status|file-exists|file-contains|diff-changed|metric-threshold}');
@@ -338,6 +344,7 @@ describe('session workflow-loop', () => {
     expect(plan.actions[0]).toMatchObject({ kind: 'work', ticketId: 'C3' });
     expect(plan.actions[0]?.text).toContain('"title": "Unblock deploy"');
     expect(plan.map.active?.ticketId).toBe('C3');
+    expect(plan.map.sessionsByTicket.C3?.lastState).toBe('reserved');
   });
 
   it('keeps no-work path as dispatch no-op', () => {
@@ -408,5 +415,25 @@ describe('session workflow-loop', () => {
     expect(reopened.sessionsByTicket.A1?.lastState).toBe('in_progress');
     expect(reopened.sessionsByTicket.A1?.closedAt).toBeUndefined();
     expect(reopened.active?.ticketId).toBe('A1');
+  });
+
+  it('promotes a reserved session to in_progress only after worker execution is confirmed', () => {
+    const map = {
+      version: 1 as const,
+      active: { ticketId: 'A1', sessionId: 'kwf-A1-1' },
+      sessionsByTicket: {
+        A1: { sessionId: 'kwf-A1-1', lastState: 'reserved' as const, lastSeenAt: '2026-02-28T13:00:00.000Z' },
+      },
+    };
+
+    const promoted = markSessionInProgress(
+      structuredClone(map),
+      'A1',
+      new Date('2026-02-28T13:01:00.000Z'),
+    );
+
+    expect(promoted.sessionsByTicket.A1?.lastState).toBe('in_progress');
+    expect(promoted.sessionsByTicket.A1?.lastSeenAt).toBe('2026-02-28T13:01:00.000Z');
+    expect(promoted.active).toEqual({ ticketId: 'A1', sessionId: 'kwf-A1-1' });
   });
 });
