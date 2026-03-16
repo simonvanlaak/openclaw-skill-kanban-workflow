@@ -154,6 +154,8 @@ const WORKER_POLICY_DIGEST = [
   '- For ticket bootstrap and duplicate/context checks, run scripts/kwf_ticket_probe.ts first instead of improvising raw Plane CLI queries.',
   '- Do not start with broad raw `plane issues list` exploration unless the ticket probe is insufficient.',
   '- Before implementation, scan potentialDuplicates and sanity-check for duplicates.',
+  '- If there is a human follow-up comment/question, explicitly answer it in this turn.',
+  '- If decision="completed", the first sentence of solution_summary must directly answer the latest human follow-up when one exists.',
   '- If unsure and clarification is needed, use decision="uncertain" with clarification_questions.',
   '- Keep output concise and evidence-backed; avoid boilerplate.',
   '',
@@ -743,6 +745,27 @@ function buildDeltaSinceLastTurn(context: TicketContext, previousSeenAtIso?: str
   return newComments.join('\n');
 }
 
+function isWorkerDecisionComment(body: string | undefined): boolean {
+  const normalized = String(body ?? '').toLowerCase();
+  if (!normalized) return false;
+  return normalized.includes('worker decision:');
+}
+
+function findLatestHumanFollowUp(context: TicketContext): {
+  at?: string;
+  author?: string;
+  authorId?: string;
+  authorName?: string;
+  body?: string;
+} | null {
+  for (const comment of context.comments) {
+    if (!comment?.body) continue;
+    if (isWorkerDecisionComment(comment.body)) continue;
+    return comment;
+  }
+  return null;
+}
+
 function buildWorkInstruction(params: {
   ticketId: string;
   sessionDisplayId: string;
@@ -756,6 +779,7 @@ function buildWorkInstruction(params: {
   const contextJson = JSON.stringify(compactContextForPrompt(context), null, 2);
   const ticketMemoryJson = JSON.stringify(compactTicketMemoryForPrompt(params.ticketMemory), null, 2);
   const delta = buildDeltaSinceLastTurn(context, params.previousSeenAtIso);
+  const latestHumanFollowUp = findLatestHumanFollowUp(context);
   const workerAgentGuide = loadWorkerAgentGuide();
 
   return [
@@ -773,6 +797,14 @@ function buildWorkInstruction(params: {
     '',
     'DELTA_SINCE_LAST_TURN',
     delta,
+    ...(latestHumanFollowUp
+      ? [
+          '',
+          'LATEST_HUMAN_FOLLOW_UP (must be addressed explicitly):',
+          `[${latestHumanFollowUp.at ?? 'unknown-time'}] ${latestHumanFollowUp.authorName ?? latestHumanFollowUp.authorId ?? latestHumanFollowUp.author ?? 'unknown'}: ${latestHumanFollowUp.body ?? ''}`,
+          'Requirement: if you can answer this now, answer it directly in the first sentence of solution_summary.',
+        ]
+      : []),
     ...(params.includeFullGuide && workerAgentGuide
       ? [
           '',

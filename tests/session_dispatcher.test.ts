@@ -171,6 +171,50 @@ describe('session workflow-loop', () => {
     expect(plan.actions[0]?.text).toContain('Only fall back to raw Plane CLI exploration if the probe output is insufficient for the task.');
   });
 
+  it('surfaces the latest human follow-up question explicitly in the worker prompt', () => {
+    const plan = buildWorkflowLoopPlan({
+      previousMap: {
+        version: 1 as const,
+        active: {
+          ticketId: 'A1',
+          sessionId: 'a1',
+        },
+        sessionsByTicket: {
+          A1: {
+            sessionId: 'a1',
+            sessionLabel: 'A1 Fix login race',
+            lastState: 'in_progress' as const,
+            lastSeenAt: '2026-02-28T14:00:00.000Z',
+          },
+        },
+      },
+      now: new Date('2026-02-28T14:05:00.000Z'),
+      autopilotOutput: {
+        tick: { kind: 'in_progress', id: 'A1', inProgressIds: ['A1'] },
+        nextTicket: {
+          kind: 'item',
+          item: { id: 'A1', title: 'Fix login race' },
+          comments: [
+            {
+              createdAt: '2026-02-28T14:04:00.000Z',
+              body: 'Where can I access the preview?',
+              author: { id: 'human-1', name: 'Simon van Laak' },
+            },
+            {
+              createdAt: '2026-02-28T14:03:00.000Z',
+              body: 'Worker decision: completed\nSolution summary:\nPreview deployed.',
+              author: { id: 'worker-1', name: 'Jules' },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(plan.actions[0]?.text).toContain('LATEST_HUMAN_FOLLOW_UP (must be addressed explicitly):');
+    expect(plan.actions[0]?.text).toContain('Where can I access the preview?');
+    expect(plan.actions[0]?.text).toContain('the first sentence of solution_summary must directly answer the latest human follow-up');
+  });
+
   it('uses linked issue key for worker session id + label when available', () => {
     const plan = buildWorkflowLoopPlan({
       previousMap: { version: 1 as const, sessionsByTicket: {} },
