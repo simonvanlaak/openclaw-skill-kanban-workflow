@@ -73,6 +73,18 @@ type AgentWaitSnapshot = {
   error?: string;
 };
 
+type StoredSubagentRun = {
+  runId?: string;
+  childSessionKey?: string;
+  endedAt?: number;
+  endedReason?: string;
+  frozenResultText?: string;
+  frozenResultCapturedAt?: number;
+  outcome?: {
+    status?: string;
+  };
+};
+
 function resolvePositiveInt(raw: string | undefined, fallback: number): number {
   const n = Number(raw ?? '');
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -219,6 +231,39 @@ function resolveOpenClawRoot(): string {
   const configured = (process.env.OPENCLAW_HOME ?? '').trim();
   if (configured) return configured;
   return path.join(process.env.HOME || '/root', '.openclaw');
+}
+
+async function readStoredSubagentRun(params: {
+  runId?: string;
+  childSessionKey?: string;
+}): Promise<StoredSubagentRun | null> {
+  const runsPath = path.join(resolveOpenClawRoot(), 'subagents', 'runs.json');
+  let payload: unknown;
+  try {
+    payload = JSON.parse(await fs.readFile(runsPath, 'utf8'));
+  } catch {
+    return null;
+  }
+
+  const runs = payload && typeof payload === 'object'
+    ? (payload as Record<string, unknown>).runs
+    : null;
+  if (!runs || typeof runs !== 'object') return null;
+
+  const entries = Object.values(runs as Record<string, unknown>)
+    .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object');
+
+  const exactByRunId = params.runId
+    ? entries.find((row) => String(row.runId ?? '').trim() === params.runId)
+    : null;
+  if (exactByRunId) return exactByRunId as StoredSubagentRun;
+
+  const exactBySessionKey = params.childSessionKey
+    ? entries.find((row) => String(row.childSessionKey ?? '').trim() === params.childSessionKey)
+    : null;
+  if (exactBySessionKey) return exactBySessionKey as StoredSubagentRun;
+
+  return null;
 }
 
 async function readLocalSessionHistory(sessionKey: string): Promise<unknown | null> {
@@ -494,19 +539,40 @@ export async function loadTrackedWorkerRunState(
       entry.activeRun.sessionKey,
       Number.isFinite(startedAtMs) ? startedAtMs - 1 : 0,
     );
-    if (!reply?.text?.trim()) {
-      return { kind: 'running', meta };
+    if (reply?.text?.trim()) {
+      return {
+        kind: 'completed',
+        meta,
+        workerOutput: reply.text,
+        raw: reply.text,
+        routing: {
+          sessionKey: entry.activeRun.sessionKey,
+          sessionId: reply.sessionId ?? entry.sessionId,
+        },
+      };
     }
-    return {
-      kind: 'completed',
-      meta,
-      workerOutput: reply.text,
-      raw: reply.text,
-      routing: {
-        sessionKey: entry.activeRun.sessionKey,
-        sessionId: reply.sessionId ?? entry.sessionId,
-      },
-    };
+
+    const storedRun = await readStoredSubagentRun({
+      runId: entry.activeRun.runId,
+      childSessionKey: entry.activeRun.sessionKey,
+    });
+    const frozenResultText = String(storedRun?.frozenResultText ?? '').trim();
+    const endedAt = Number(storedRun?.endedAt);
+    const outcomeStatus = String(storedRun?.outcome?.status ?? '').trim().toLowerCase();
+    if (frozenResultText && Number.isFinite(endedAt) && (!outcomeStatus || outcomeStatus === 'ok')) {
+      return {
+        kind: 'completed',
+        meta,
+        workerOutput: frozenResultText,
+        raw: frozenResultText,
+        routing: {
+          sessionKey: entry.activeRun.sessionKey,
+          sessionId: entry.sessionId,
+        },
+      };
+    }
+
+    return { kind: 'running', meta };
   }
 
   return loadWorkerDelegationState(entry?.sessionId ?? '', ticketId, opts);

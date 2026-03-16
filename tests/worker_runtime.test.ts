@@ -426,4 +426,61 @@ describe('worker runtime terminal assistant reply detection', () => {
       },
     });
   });
+
+  it('reports a spawned worker run as completed from runs.json when local child session history is unavailable', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'kwf-worker-runtime-'));
+    tempDirs.push(root);
+    process.env.OPENCLAW_HOME = root;
+
+    await fs.mkdir(path.join(root, 'subagents'), { recursive: true });
+    await fs.writeFile(
+      path.join(root, 'subagents', 'runs.json'),
+      JSON.stringify(
+        {
+          version: 2,
+          runs: {
+            'run-3': {
+              runId: 'run-3',
+              childSessionKey: 'agent:main:subagent:child-3',
+              endedAt: 1773576600000,
+              endedReason: 'subagent-complete',
+              frozenResultCapturedAt: 1773576601000,
+              frozenResultText: '{"decision":"completed"}',
+              outcome: { status: 'ok' },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      'utf8',
+    );
+
+    await expect(
+      loadTrackedWorkerRunState(
+        'ticket-3',
+        {
+          sessionId: 'jules-298',
+          lastState: 'in_progress',
+          lastSeenAt: '2026-03-15T12:30:00.000Z',
+          activeRun: {
+            requestId: 'req-3',
+            runId: 'run-3',
+            status: 'started',
+            sentAt: '2026-03-15T12:30:00.000Z',
+            waitTimeoutSeconds: 3600,
+            sessionKey: 'agent:main:subagent:child-3',
+          },
+        },
+        workerRuntimeOpts(path.join(root, 'delegations')),
+      ),
+    ).resolves.toMatchObject({
+      kind: 'completed',
+      workerOutput: '{"decision":"completed"}',
+      routing: {
+        sessionKey: 'agent:main:subagent:child-3',
+        sessionId: 'jules-298',
+      },
+    });
+  });
 });
