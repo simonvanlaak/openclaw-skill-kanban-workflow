@@ -26,6 +26,7 @@ import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
+from pathlib import Path
 
 LISTEN_HOST = os.getenv("PLANE_WEBHOOK_HOST", "127.0.0.1").strip() or "127.0.0.1"
 LISTEN_PORT = int(os.getenv("PLANE_WEBHOOK_PORT", "8791"))
@@ -50,9 +51,27 @@ CACHE_EVENT_FILE = os.getenv(
     "PLANE_WEBHOOK_CACHE_EVENT_FILE",
     "/root/.openclaw/workspace/.tmp/kwf-plane-webhook-events.json",
 ).strip()
+WEBHOOK_LOG_FILE = os.getenv(
+    "PLANE_WEBHOOK_LOG_FILE",
+    "/var/log/openclaw/plane-webhook-kwf.log",
+).strip()
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
 )
+
+
+def _log_line(message: str, **extra):
+    try:
+        Path(WEBHOOK_LOG_FILE).parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "message": message,
+            **extra,
+        }
+        with open(WEBHOOK_LOG_FILE, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _safe_json(raw: bytes):
@@ -184,11 +203,21 @@ def _spawn_reconcile_human_comment(payload: dict):
     work_item_ids = sorted(_extract_work_item_ids(payload))
     comment_ids = sorted(_extract_comment_ids(payload))
     if not work_item_ids or not comment_ids:
+        _log_line(
+            "webhook-comment-reconcile-skipped",
+            ticket_ids=work_item_ids,
+            comment_ids=comment_ids,
+        )
         return
 
     for ticket_id in work_item_ids:
         for comment_id in comment_ids:
             cmd = RECONCILE_CMD.format(ticket_id=ticket_id, comment_id=comment_id)
+            _log_line(
+                "webhook-comment-reconcile-spawn",
+                ticket_id=ticket_id,
+                comment_id=comment_id,
+            )
             subprocess.Popen(
                 ["bash", "-lc", cmd],
                 start_new_session=True,
@@ -237,6 +266,15 @@ class Handler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(n) if n > 0 else b""
         payload = _safe_json(raw)
+        _log_line(
+            "webhook-post",
+            client_ip=client_ip,
+            has_token=bool(got),
+            content_length=n,
+            project_ids=sorted(_extract_project_ids(payload)),
+            ticket_ids=sorted(_extract_work_item_ids(payload)),
+            comment_ids=sorted(_extract_comment_ids(payload)),
+        )
 
         if not _ok_to_trigger(payload):
             return self._send(200, "ignored")
@@ -261,8 +299,10 @@ class Handler(BaseHTTPRequestHandler):
                 stderr=subprocess.DEVNULL,
                 env=os.environ.copy(),
             )
+            _log_line("webhook-workflow-trigger-spawned")
         except Exception as e:
             # Best-effort only, cron remains the backup.
+            _log_line("webhook-workflow-trigger-failed", error=str(e)[:200])
             return self._send(500, f"trigger failed: {str(e)[:120]}")
 
         return self._send(200, "ok")
