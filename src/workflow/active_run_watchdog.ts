@@ -7,6 +7,7 @@ import type { StageKey } from '../stage.js';
 import type { WorkerRuntimeOptions } from './worker_runtime.js';
 import { loadTrackedWorkerRunState } from './worker_runtime.js';
 import { runDelegationReconciler, type DelegationReconcileResult } from './delegation_reconciler.js';
+import { maybeSendFakeWipAlert, type FakeWipAlert } from './fake_wip_alert.js';
 import type { WorkflowLifecycleAdapter } from './workflow_loop_ports.js';
 
 export type ActiveRunWatchdogResult = {
@@ -21,6 +22,10 @@ export type ActiveRunWatchdogResult = {
     sessionId: string;
     requestId: string;
     ageSeconds: number;
+    remediated?: boolean;
+    stageBefore?: StageKey;
+    stageAfter?: StageKey;
+    alert?: FakeWipAlert;
   }>;
   staleRunning: Array<{
     ticketId: string;
@@ -31,6 +36,17 @@ export type ActiveRunWatchdogResult = {
     remediated?: boolean;
     stageBefore?: StageKey;
     stageAfter?: StageKey;
+    alert?: FakeWipAlert;
+  }>;
+  orphanedRuns: Array<{
+    ticketId: string;
+    sessionId: string;
+    runId?: string;
+    childSessionKey?: string;
+    remediated?: boolean;
+    stageBefore?: StageKey;
+    stageAfter?: StageKey;
+    alert?: FakeWipAlert;
   }>;
 };
 
@@ -69,6 +85,7 @@ export async function runActiveRunWatchdog(params: {
   now?: Date;
   requestedStaleAfterSeconds?: number;
   runningStaleGraceSeconds?: number;
+  remediateStaleRequested?: boolean;
   remediateStaleRunning?: boolean;
 }): Promise<ActiveRunWatchdogResult> {
   const map = await loadSessionMap(params.mapPath);
@@ -76,6 +93,7 @@ export async function runActiveRunWatchdog(params: {
   const nowMs = now.getTime();
   const requestedStaleAfterSeconds = params.requestedStaleAfterSeconds ?? 120;
   const runningStaleGraceSeconds = params.runningStaleGraceSeconds ?? 120;
+  const remediateStaleRequested = params.remediateStaleRequested ?? true;
   const remediateStaleRunning = params.remediateStaleRunning ?? true;
 
   const result: ActiveRunWatchdogResult = {
@@ -83,6 +101,7 @@ export async function runActiveRunWatchdog(params: {
     reconciled: [],
     staleRequested: [],
     staleRunning: [],
+    orphanedRuns: [],
   };
 
   for (const [ticketId, entry] of Object.entries(map.sessionsByTicket ?? {})) {
@@ -90,13 +109,47 @@ export async function runActiveRunWatchdog(params: {
     result.scanned += 1;
 
     if (entry.activeRun.status === 'spawn_requested') {
+      const activeRun = entry.activeRun;
       const ageSeconds = ageSecondsFrom(entry.activeRun.sentAt, nowMs);
       if (ageSeconds != null && ageSeconds >= requestedStaleAfterSeconds) {
+        let stageBefore: StageKey | undefined;
+        let stageAfter: StageKey | undefined;
+        let remediated = false;
+
+        if (remediateStaleRequested) {
+          const item = typeof params.adapter.getWorkItem === 'function'
+            ? await params.adapter.getWorkItem(ticketId).catch(() => undefined)
+            : undefined;
+          stageBefore = item?.stage as StageKey | undefined;
+          const targetStage = params.requeueTargetStage ?? 'stage:todo';
+          if (!stageBefore || stageBefore === 'stage:in-progress') {
+            await params.adapter.setStage(ticketId, targetStage);
+            stageAfter = targetStage;
+          } else {
+            stageAfter = stageBefore;
+          }
+          clearStaleActiveRun(map, ticketId, now.toISOString(), stageAfter);
+          await saveSessionMap(map, params.mapPath);
+          remediated = true;
+        }
+
+        const alert = remediated
+          ? await maybeSendFakeWipAlert({
+              ticketId,
+              sessionId: entry.sessionId,
+              reason: `spawn request never became a real run and was requeued from ${stageBefore ?? 'unknown'} to ${stageAfter ?? 'unknown'}`,
+            })
+          : undefined;
+
         result.staleRequested.push({
           ticketId,
           sessionId: entry.sessionId,
-          requestId: entry.activeRun.requestId,
+          requestId: activeRun.requestId,
           ageSeconds,
+          remediated,
+          stageBefore,
+          stageAfter,
+          alert,
         });
       }
       continue;
@@ -153,6 +206,14 @@ export async function runActiveRunWatchdog(params: {
           remediated = true;
         }
 
+        const alert = remediated
+          ? await maybeSendFakeWipAlert({
+              ticketId,
+              sessionId: entry.sessionId,
+              reason: `worker run exceeded timeout window and was requeued from ${stageBefore ?? 'unknown'} to ${stageAfter ?? 'unknown'}`,
+            })
+          : undefined;
+
         result.staleRunning.push({
           ticketId,
           sessionId: entry.sessionId,
@@ -162,8 +223,55 @@ export async function runActiveRunWatchdog(params: {
           remediated,
           stageBefore,
           stageAfter,
+          alert,
         });
       }
+      continue;
+    }
+
+    if (state.kind === 'none') {
+      const activeRun = entry.activeRun;
+      let stageBefore: StageKey | undefined;
+      let stageAfter: StageKey | undefined;
+      let remediated = false;
+
+      if (remediateStaleRunning) {
+        const item = typeof params.adapter.getWorkItem === 'function'
+          ? await params.adapter.getWorkItem(ticketId).catch(() => undefined)
+          : undefined;
+        stageBefore = item?.stage as StageKey | undefined;
+        const targetStage = params.requeueTargetStage ?? 'stage:todo';
+
+        if (!stageBefore || stageBefore === 'stage:in-progress') {
+          await params.adapter.setStage(ticketId, targetStage);
+          stageAfter = targetStage;
+        } else {
+          stageAfter = stageBefore;
+        }
+
+        clearStaleActiveRun(map, ticketId, now.toISOString(), stageAfter);
+        await saveSessionMap(map, params.mapPath);
+        remediated = true;
+      }
+
+      const alert = remediated
+        ? await maybeSendFakeWipAlert({
+            ticketId,
+            sessionId: entry.sessionId,
+            reason: `active run metadata existed but no backing run/session could be found; requeued from ${stageBefore ?? 'unknown'} to ${stageAfter ?? 'unknown'}`,
+          })
+        : undefined;
+
+      result.orphanedRuns.push({
+        ticketId,
+        sessionId: entry.sessionId,
+        runId: activeRun.runId,
+        childSessionKey: activeRun.sessionKey,
+        remediated,
+        stageBefore,
+        stageAfter,
+        alert,
+      });
     }
   }
 

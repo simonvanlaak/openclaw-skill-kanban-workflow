@@ -17,6 +17,7 @@ import { runHumanCommentReconciler } from './workflow/human_comment_reconciler.j
 import { runDoneTodoRepair } from './workflow/done_todo_repair.js';
 import { runSubagentCompletionReconciler } from './workflow/subagent_completion_reconciler.js';
 import { runActiveRunWatchdog } from './workflow/active_run_watchdog.js';
+import { runReliabilitySelfCheck } from './workflow/reliability_self_check.js';
 import { runAutoReopenOnHumanComment } from './automation/auto_reopen.js';
 import { runWorkflowLoopController } from './workflow/workflow_loop_controller.js';
 import { runWorkflowLoopSelection } from './workflow/workflow_loop_selection.js';
@@ -82,6 +83,7 @@ function writeHelp(io: CliIo): void {
       '  kanban-workflow reconcile-subagent-ended --child-session-key <session-key>',
       '  kanban-workflow reconcile-human-comment --ticket-id <ticket-id> [--comment-id <comment-id>]',
       '  kanban-workflow reconcile-active-runs [--dry-run]',
+      '  kanban-workflow reliability-self-check',
       '  kanban-workflow auto-reopen-scan [--dry-run]',
       '  kanban-workflow repair-done-todo [--dry-run]',
       '',
@@ -397,6 +399,13 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     if (cmd === 'workflow-loop') {
+      const selfCheck = await runReliabilitySelfCheck({
+        workerAgentId: WORKER_AGENT_ID,
+        workflowLoopAgentId: WORKFLOW_LOOP_AGENT_ID,
+      });
+      if (selfCheck.issues.length > 0) {
+        io.stderr.write(`${JSON.stringify({ reliabilitySelfCheck: selfCheck }, null, 2)}\n`);
+      }
       // Per-loop identity cache: avoid repeated `whoami` calls across selection,
       // auto-reopen, queue reconciliation, and adapter internals in the same run.
       if (typeof (adapter as any).whoami === 'function') {
@@ -512,6 +521,10 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
     }
 
     if (cmd === 'reconcile-active-runs') {
+      const selfCheck = await runReliabilitySelfCheck({
+        workerAgentId: WORKER_AGENT_ID,
+        workflowLoopAgentId: WORKFLOW_LOOP_AGENT_ID,
+      });
       const result = await runActiveRunWatchdog({
         adapter,
         dispatchRunId: randomUUID(),
@@ -519,8 +532,17 @@ export async function runCli(rawArgv: string[], io: CliIo = { stdout: process.st
         workerRuntimeOptions: WORKER_RUNTIME_OPTIONS,
         requeueTargetStage,
       });
-      io.stdout.write(`${JSON.stringify({ activeRunWatchdog: result }, null, 2)}\n`);
+      io.stdout.write(`${JSON.stringify({ reliabilitySelfCheck: selfCheck, activeRunWatchdog: result }, null, 2)}\n`);
       return 0;
+    }
+
+    if (cmd === 'reliability-self-check') {
+      const result = await runReliabilitySelfCheck({
+        workerAgentId: WORKER_AGENT_ID,
+        workflowLoopAgentId: WORKFLOW_LOOP_AGENT_ID,
+      });
+      io.stdout.write(`${JSON.stringify({ reliabilitySelfCheck: result }, null, 2)}\n`);
+      return result.ok ? 0 : 1;
     }
 
     if (cmd === 'auto-reopen-scan') {

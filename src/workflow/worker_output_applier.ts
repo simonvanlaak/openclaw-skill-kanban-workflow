@@ -5,6 +5,7 @@ import {
   type SessionMap,
   type WorkerCommandResult,
 } from '../automation/session_dispatcher.js';
+import { randomUUID } from 'node:crypto';
 import type { ExternalLinkInput } from '../verbs/types.js';
 import { buildRetryPrompt } from './ticket_runtime.js';
 import {
@@ -301,6 +302,7 @@ export async function applyWorkerOutputToTicket(params: {
     if (!reusePending) {
       entry.pendingMutation = {
         kind: 'worker_result',
+        operationId: randomUUID(),
         decision: mutationPlan.decision,
         commentBody: mutationPlan.commentBody,
         targetStage: mutationPlan.targetStage,

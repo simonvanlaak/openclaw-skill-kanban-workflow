@@ -52,6 +52,7 @@ export type SessionEntry = {
   pendingMutation?: (
     | {
         kind: 'worker_result';
+        operationId?: string;
         decision: 'completed' | 'blocked';
         commentBody: string;
         targetStage: 'stage:in-review' | 'stage:blocked';
@@ -63,6 +64,7 @@ export type SessionEntry = {
       }
     | {
         kind: 'human_reopen';
+        operationId?: string;
         fromStage: 'stage:blocked' | 'stage:in-review' | 'state:done';
         toStage: import('../stage.js').StageKey;
         triggerCommentId: string;
@@ -71,6 +73,7 @@ export type SessionEntry = {
       }
     | {
         kind: 'ticket_reservation';
+        operationId?: string;
         targetStage: 'stage:in-progress';
         createdAt: string;
         stageAppliedAt?: string;
